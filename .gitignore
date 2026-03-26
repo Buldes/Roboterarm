@@ -180,3 +180,9 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 /ESP32-Micropython_Installation/
+/.idea
+/.idea
+/.idea
+.idea/misc.xml
+*.iml
+*.xml

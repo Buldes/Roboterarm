@@ -13,6 +13,10 @@ class TMC2209:
         self.dir_pin = None
         self.en_pin = None
 
+        # steps
+        self.full_steps_per_rev = 200
+        self.microsteps = 8
+
     def init_pins(self):
         self.step_pin = Pin(self.step_pin_num, Pin.OUT)
         self.dir_pin = Pin(self.dir_pin_num, Pin.OUT)
@@ -35,7 +39,13 @@ class TMC2209:
         time.sleep_us(10)
         self.step_pin.value(0)
 
-    def run_steps_with_delay(self, total_steps, delay_ms):
+    def run_steps_with_delay(self, total_steps, delay_us):
         for _ in range(total_steps):
             self.one_step()
-            time.sleep_us(delay_ms)
+            time.sleep_us(delay_us)
+
+    def run_steps_by_angle(self, degrees, delay_us: int = 1000):
+        total_steps_per_rev = self.full_steps_per_rev * self.microsteps
+        steps = (degrees / 360) * total_steps_per_rev
+
+        self.run_steps_with_delay(int(steps), delay_us)

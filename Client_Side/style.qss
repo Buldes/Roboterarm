@@ -1,0 +1,86 @@
+/* style.qss */
+
+/* GENERAL */
+* {
+    font-family: "Tektur";
+    font-size: 13px;
+    qproperty-alignment: AlignCenter;
+}
+
+QMainWindow {
+    background-color: #171717; 
+}
+
+QWidget{
+    border: none; 
+    background: transparent;
+    margin: 0px;
+}
+
+#field {
+    background-color: #1e1e1e;
+    border-radius: 15px;
+    margin: 5px;
+}
+
+#container {
+    background-color: transparent;
+    border: none;
+    margin: 0px;
+}
+
+/*ALL FIELDS*/
+#field_title_label{
+    font-size: 18px;
+    font-family: "Tektur";
+    qproperty-alignment: 'AlignHCenter | AlignTop';
+    margin-bottom: 20px;
+}
+
+#status_field{
+    height: 40px;
+    background-color: rgb(107, 107, 107);
+    qproperty-alignment: AlignCenter;
+    padding: 10px;
+}
+#status_field[status="0"]{
+    background-color: rgb(183, 0, 0);
+}
+#status_field[status="1"]{
+    background-color: rgb(155, 137, 0);
+}
+#status_field[status="2"]{
+    background-color: rgb(51, 171, 0);
+}
+
+/* FIELD 1 */
+#title_name {
+    font-size: 20px;
+    font-family: "Sixtyfour Close";
+}
+
+/*FIELD 2*/
+#vector_title {
+    font-size: 15px;
+    margin: 10px;
+}
+
+#exit_button{
+    font-size: 15px;
+    font-weight: 900;
+}
+
+/*FIELD 4*/
+#logging_label {
+    font-family: "Tektur";
+    font-size: 15px;
+}
+#logging_label[type="LOG"] {
+    color: rgb(0, 182, 0);
+}
+#logging_label[type="WARNING"] {
+    color: rgb(179, 182, 0);
+}
+#logging_label[type="ERROR"] {
+    color: rgb(182, 0, 0);
+}

@@ -1,5 +1,8 @@
 import machine
 import sys
+
+import time
+
 sys.path.append('/Driver/library/')
 from ir_rx.nec import NEC_8
 
@@ -23,7 +26,7 @@ class IR_Controller:
     def callback(self, data, addr, ctrl):
         if data < 0:
             return
-        self.last_press = hex(data)
+        self.last_press = data
 
     def close_callback(self):
         self.ir_callback.close()

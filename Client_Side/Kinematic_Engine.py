@@ -12,7 +12,7 @@ class Kinematik_Engine:
         # Limit Value
         self.joints_intervall: tuple[int] = joints_intervall
         self.base_step_winkel: float = base_step_winkel
-        self.total_length: float = 30.0
+        self.total_length: float = total_length
         self.max_length: float = 0.91
 
         # calculating process

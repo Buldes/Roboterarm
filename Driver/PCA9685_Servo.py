@@ -14,7 +14,6 @@ class Servo_Driver:
             # servo config
             self.servo_config: list = [] # [[PIN_NUM, MAX_DEGREE, MIN_DUTY, MAX_DUTY], ...]
 
-
         def init_i2c(self):
             # i2c
             self.i2c = I2C(0, scl=Pin(22), sda=Pin(21), freq=100000)
@@ -46,10 +45,10 @@ class Servo_Driver:
             self.emergency_switch_pin.value(1)
 
             for servo in self.servo_config:
-                self.set_channel_duty(servo[0], servo[2])
+                self.set_channel_duty(servo[0], 0)
 
-        def add_servo_config(self, PIN_NUM, MAX_DEGREE, MIN_DUTY, MAX_DUTY):
-            self.servo_config.append([PIN_NUM, MAX_DEGREE, MIN_DUTY, MAX_DUTY])
+        def add_servo_config(self, PIN_NUM, MAX_DEGREE, MIN_DUTY, MAX_DUTY, inverted: bool = False):
+            self.servo_config.append([PIN_NUM, MAX_DEGREE, MIN_DUTY, MAX_DUTY, inverted])
 
         def delete_servo_config(self, num):
             self.servo_config.pop(num)
@@ -59,10 +58,12 @@ class Servo_Driver:
 
             percentage = degree / all_configs[1]
 
+            if all_configs[4]:
+                percentage = 1 - percentage
+
             duty_num = int(round(all_configs[2] + ((all_configs[3] - all_configs[2]) * percentage)))
 
             self.set_channel_duty(all_configs[0], duty_num)
-
 
         def set_channel_duty(self, channel_num, duty_num):
             reg = 0x06 + (channel_num * 4)
