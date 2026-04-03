@@ -32,6 +32,7 @@ class network_and_socket:
         # init wlan
         self.wlan = network.WLAN(network.STA_IF)
         self.wlan.active(True)
+        self.wlan.config(pm=0) # deactivates power safe mode
 
         if not self.wlan.isconnected():
 
@@ -50,11 +51,15 @@ class network_and_socket:
         self.socket = usocket.socket(usocket.AF_INET, usocket.SOCK_DGRAM)
 
         self.socket.bind(("0.0.0.0", self.port))
+        self.socket.settimeout(0.05)
 
         self.is_online = True
 
     def recv_data(self):
-        data, addr = self.socket.recvfrom(1024)
+        try:
+            data, addr = self.socket.recvfrom(1024)
+        except OSError:
+            return False
         # decode message
         message = data.decode('utf-8')
 
@@ -77,8 +82,12 @@ class network_and_socket:
         while True:
             m = self.recv_data()
 
+            if not m:
+                continue
+
             if m == "ping":
                 self.send_message("ping")
             else:
                 m = m.replace("'", '"')
                 data = json.loads(m)
+                self.add_data_queue(data)

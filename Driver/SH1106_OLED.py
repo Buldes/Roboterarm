@@ -20,7 +20,7 @@ class SH1106_OLED:
             self.display.init_display()
             time.sleep_ms(20)
             self.clear()
-            self.set_contrast(255)
+            self.set_contrast(254)
 
         def clear(self, value: int=0):
             self.display.fill(value)

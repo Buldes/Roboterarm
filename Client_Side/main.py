@@ -1,14 +1,15 @@
 import time
-from PySide6.QtWidgets import QMainWindow, QWidget, QPushButton, QApplication, QVBoxLayout, QHBoxLayout, QLabel, QGridLayout, QButtonGroup
+from PySide6.QtWidgets import QMainWindow, QWidget, QPushButton, QApplication, QVBoxLayout, QHBoxLayout, QLabel, QGridLayout, QButtonGroup, QLineEdit,QStackedWidget,QSizePolicy
 import sys
 from qt_material import apply_stylesheet
 import os
-from PySide6.QtCore import QPropertyAnimation, Property, QEasingCurve, Qt, QThread, QTimer, QRunnable, QObject, Signal, QThreadPool, Slot, QMutex
+from PySide6.QtCore import QPropertyAnimation, Property, QEasingCurve, Qt, QThread, QTimer, QRunnable, QObject, Signal, QThreadPool, Slot, QMutex, QSize
 from PySide6.QtGui import QFontDatabase
 from inputs import get_gamepad, UnpluggedError
 import datetime
 import Kinematic_Engine
 import socket
+from PySide6.QtSvgWidgets import QSvgWidget
 
 def load_stylesheet(file_path):
     abs_path = os.path.abspath(__file__).replace("main.py", "")
@@ -121,6 +122,11 @@ class SocketThread(QThread):
         self.data_send = None
         self.is_running = True
 
+        self.ping_test_delay = 2
+        self.last_ping_test = time.time()
+
+        self.last_data_feed = time.time()
+
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.server_address = ('10.42.0.62', 4242)
         self.socket.bind(("0.0.0.0", 4242))
@@ -140,7 +146,7 @@ class SocketThread(QThread):
         self.socket.sendto(new_data.encode(), self.server_address)
 
     def check_server_status(self):
-        start_time = time.time()
+        start_time = time.perf_counter()
 
         self.send_data("ping")
         try:
@@ -153,7 +159,7 @@ class SocketThread(QThread):
             return
 
         # get delay
-        delay = time.time() - start_time
+        delay = time.perf_counter() - start_time
         self.socket_status.emit(1, 1)
         self.server_ping.emit(int(delay * 1_000))
 
@@ -184,6 +190,12 @@ class SocketThread(QThread):
 
                     self.data_send = data_to_send
 
+                    self.last_data_feed = time.time()
+
+                elif time.time() - self.last_data_feed >= 0.2 and time.time() - self.last_ping_test >= self.ping_test_delay:
+                    self.check_server_status()
+                    self.last_ping_test = time.time()
+
                 # sleep
                 time.sleep(0.05)
 
@@ -194,6 +206,23 @@ class SocketThread(QThread):
                 time.sleep(1)
         # stop
         self.socket.close()
+
+
+class AspectRatioSvgWidget(QSvgWidget):
+    def __init__(self, file_path, ratio=1.0):
+        super().__init__(file_path)
+        self.ratio = ratio # h / w
+
+        size_policy = QSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        size_policy.setHeightForWidth(True)
+        self.setSizePolicy(size_policy)
+
+    def heightForWidth(self, width):
+        return int(width * self.ratio)
+
+    def sizeHint(self):
+        w = self.width()
+        return QSize(w, int(w * self.ratio))
 
 class MainWindow(QMainWindow):
     new_vector = Signal(float, float, float, str)
@@ -238,6 +267,10 @@ class MainWindow(QMainWindow):
         self.vector_label_real_title = None
         self.vector_label_real = None
         self.exit_button = None
+        self.vector_input_label = None
+        self.vector_input_fields = None
+        self.vector_input_title = None
+        self.vector_input_btn = None
 
         # ALL FIELD 3
         self.title_label_field3 = None
@@ -251,10 +284,27 @@ class MainWindow(QMainWindow):
         # ALL FIELD 4
         self.logging_label = None
 
+        # ALL FIELD 5 — STACKED WIDGET
+        self.perspective_tab = None
+        self.perspective_layout = None
+        self.orthogonal_tab = None
+        self.orthogonal_layout = None
+        self.animated_tab = None
+        self.animated_layout = None
+        self.static_tab = None
+        self.static_layout = None
+        self.field5_stacked_widget = None
+        # PERSPECTIVE
+        # ORTHOGONAL
+        # 2D-ANIMATED
+        # 2D-STATIC
+        self.static_svg_widget = None
+
         """GENERAL VAR"""
         self.version = "0.1.0 BETA"
         self.setWindowTitle(f"S.I.R.I.U.S. Control - {self.version}")
         self.base_path = os.path.dirname(os.path.abspath(__file__))
+        self.robot_arm_svg_path = fr"{self.base_path}/assets/img/arm.svg"
 
         # For GUI
         self.perspective_selected = "perspektive" # orthogonal, 2d-animated, 2d-static
@@ -267,6 +317,7 @@ class MainWindow(QMainWindow):
         """CALCULATIONS"""
         self.kinematics = Kinematic_Engine.Kinematik_Engine(total_length=45)
 
+        # <editor-fold desc="SETUP">
         """SETUP"""
         self.load_all_fonts()
         self.setup_gui()
@@ -302,12 +353,13 @@ class MainWindow(QMainWindow):
 
         """DEFAULT POSITON"""
         self.set_to_pos(0)
+        # </editor-fold>
 
     """LOGGING"""
 
     def log(self, text: str, type: int = 0):
         c_date = datetime.datetime.now().strftime("%d.%m.%Y %H:%M:%S")
-        type_str= "LOG" if type == 0 else "WARNING" if type == 1 else "ERROR"
+        type_str= "LOG" if type == 0 else "WARNUNG" if type == 1 else "FEHLER"
         message = text
 
         full_str = f"[{c_date}][{type_str}] {message}"
@@ -316,7 +368,7 @@ class MainWindow(QMainWindow):
 
         if self.logging_label is not None:
             self.logging_label.setText(f"> {full_str}")
-            self.logging_label.setProperty("type", type_str)
+            self.logging_label.setProperty("type", type_str[0])
             self.logging_label.style().unpolish(self.logging_label)
             self.logging_label.style().polish(self.logging_label)
 
@@ -412,7 +464,7 @@ class MainWindow(QMainWindow):
             self.field_1_layout.addWidget(btn, 1, i)
             self.perspective_button_group.addButton(btn, i)
 
-        self.perspective_buttons[0].setChecked(True)
+        self.perspective_buttons[3].setChecked(True)
 
     def setup_field_2(self):
         # title
@@ -435,11 +487,26 @@ class MainWindow(QMainWindow):
         self.field_2_layout.addWidget(self.controller_connection_btn, 2, 0, 1, 2)
 
         # Vector input
-        # 3, 4, 5, 6, 7
+        self.vector_input_title = QLabel("Vektor Eingeben".upper())
+        self.vector_input_title.setObjectName("under_field_title")
+        self.field_2_layout.addWidget(self.vector_input_title, 3, 0, 1, 2)
+
+        self.vector_input_label = [QLabel("X:"), QLabel("Y:"), QLabel("Z:")]
+        self.vector_input_fields = [QLineEdit(), QLineEdit(), QLineEdit()]
+
+        for i, cord in enumerate(["X", "Y", "Z"]):
+            self.vector_input_fields[i].setPlaceholderText(f"[{cord}-Wert eingeben]")
+
+        for x, column in enumerate([self.vector_input_label, self.vector_input_fields]):
+            for i in range(len(self.vector_input_label)):
+                self.field_2_layout.addWidget(column[i], 4 + i, x, 1, 1)
+
+        self.vector_input_btn = QPushButton("Bestätigen")
+        self.field_2_layout.addWidget(self.vector_input_btn, 7, 0, 1, 2)
 
         # vector label
         self.vector_label_title = QLabel("aktueller Vektor".upper())
-        self.vector_label_title.setObjectName("vector_title")
+        self.vector_label_title.setObjectName("under_field_title")
         self.vector_label_normalized_title = QLabel("Normalisiert")
         self.vector_label_normalized = QLabel("X:  -.-- \nY:  -.-- \nZ:  -.--")
 
@@ -464,12 +531,12 @@ class MainWindow(QMainWindow):
 
     def setup_field_3(self):
         self.title_label_field3 = QLabel("Output".upper())
-        self.title_label_field3.setObjectName("field_title_label")
+        self.title_label_field3.setObjectName("under_field_title")
         self.field_3_layout.addWidget(self.title_label_field3, 0, 0, 1 ,2)
 
         # all angles
         self.angle_labels_title = QLabel("WINKEL")
-        self.angle_labels_title.setObjectName("field_title_label")
+        self.angle_labels_title.setObjectName("under_field_title")
         self.field_3_layout.addWidget(self.angle_labels_title, 1, 0, 1 ,2)
 
         self.angle_labels_name = [QLabel("Basis"), QLabel("a<sub>1</sub>"), QLabel("a<sub>2</sub>"),
@@ -510,7 +577,34 @@ class MainWindow(QMainWindow):
         self.field_4_layout.addWidget(self.logging_label, 0, 0)
 
     def setup_field_5(self):
-        pass
+        # Tabs
+        self.field5_stacked_widget = QStackedWidget()
+
+        self.perspective_tab = QWidget()
+        self.perspective_layout = QGridLayout(self.perspective_tab)
+        self.orthogonal_tab = QWidget()
+        self.orthogonal_layout = QGridLayout(self.orthogonal_tab)
+        self.animated_tab = QWidget()
+        self.animated_layout = QGridLayout(self.animated_tab)
+        self.static_tab = QWidget()
+        self.static_layout = QGridLayout(self.static_tab)
+
+        # setup all tabs
+        self.setup_perspective_perspective()
+        self.setup_orthogonal_perspective()
+        self.setup_animated_perspective()
+        self.setup_static_perspective()
+
+        # Add all widgets
+        self.field5_stacked_widget.addWidget(self.perspective_tab)
+        self.field5_stacked_widget.addWidget(self.orthogonal_tab)
+        self.field5_stacked_widget.addWidget(self.animated_tab)
+        self.field5_stacked_widget.addWidget(self.static_tab)
+
+        self.field5_stacked_widget.setCurrentIndex(3)
+
+        self.field_5_layout.addWidget(self.field5_stacked_widget, 0, 0)
+
 
     def load_all_fonts(self):
         for f in ["Sixtyfour-Regular", "Jersey10-Regular", "Tektur-Regular"]:
@@ -524,6 +618,7 @@ class MainWindow(QMainWindow):
             else:
                 self.log(f"Fehler beim Laden der Schriftart von: {font_path}")
 
+    # <editor-fold desc="VECTOR AND ANGLES">
     """VECTOR AND ANGLES"""
 
     def update_gui_vector(self):
@@ -593,14 +688,32 @@ class MainWindow(QMainWindow):
         # check if calculated vektor is not current vector
         if self.calculated_vector != self.current_vector:
             self.new_vector.emit(self.current_vector[0], self.current_vector[1], self.current_vector[2], move_type)
+    # </editor-fold>
 
     """PERSPEKTIVE"""
     
     def handle_perspective_change(self, which: int):
         new_perspective = self.all_perspectives[which]
         self.perspective_selected = new_perspective
-        self.log(f"Changed perspective to {self.perspective_selected}")
+        self.log(f"Verändere perspektive zu '{self.perspective_selected}'")
 
+        self.field5_stacked_widget.setCurrentIndex(which)
+
+    def setup_perspective_perspective(self):
+        pass
+
+    def setup_orthogonal_perspective(self):
+        pass
+
+    def setup_animated_perspective(self):
+        pass
+
+    def setup_static_perspective(self):
+        self.static_svg_widget = AspectRatioSvgWidget(self.robot_arm_svg_path, ratio=1821 / 1377)
+
+        self.static_layout.addWidget(self.static_svg_widget, 0, 0)
+
+    # <editor-fold desc="X-BOX CONTROLLER">
     """X-BOX CONTROLLER"""
 
     def handle_controller_input(self, ev_type, code, state):
@@ -690,8 +803,8 @@ class MainWindow(QMainWindow):
             self.change_controller_active(1, "Kontroller aktiviert", 0)
         elif self.controller_is_connected == 0:
             self.log("Verbindung mit Kontroller wird hergestellt")
-            # self.controller_thread.terminate() # Hart beenden, falls er hängt
-            # self.controller_thread.wait()
+            self.controller_thread.terminate()
+            self.controller_thread.wait()
             self.controller_thread.start()
         elif self.controller_is_connected == 1:
             self.change_controller_active(-1, "Kontroller deaktiviert", 0)
@@ -700,6 +813,7 @@ class MainWindow(QMainWindow):
         self.socket_thread.stop()
         self.controller_thread.terminate()
         self.close()
+    # </editor-fold>
 
     """SOCKET STATUS"""
 

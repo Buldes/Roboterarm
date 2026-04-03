@@ -15,7 +15,7 @@ class TMC2209:
 
         # steps
         self.full_steps_per_rev = 200
-        self.microsteps = 8
+        self.microsteps = 8 * 3
 
     def init_pins(self):
         self.step_pin = Pin(self.step_pin_num, Pin.OUT)
@@ -44,8 +44,12 @@ class TMC2209:
             self.one_step()
             time.sleep_us(delay_us)
 
-    def run_steps_by_angle(self, degrees, delay_us: int = 1000):
+    def run_steps_by_angle(self, to_angle: float, current_angles: float, delay_us: int = 1000):
         total_steps_per_rev = self.full_steps_per_rev * self.microsteps
-        steps = (degrees / 360) * total_steps_per_rev
+
+        current_steps = (current_angles / 360) * total_steps_per_rev
+        to_steps = (to_angle / 360) * total_steps_per_rev
+
+        steps = round(abs(current_steps - to_steps))
 
         self.run_steps_with_delay(int(steps), delay_us)

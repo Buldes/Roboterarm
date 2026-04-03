@@ -53,6 +53,8 @@ class SIRIUS:
         """DS18B20 (Temperature)"""
         self.temp_sensor = DS18B20.DS18B20()
         self.temp_sensor.init()
+        time.sleep_ms(10)
+        self.temp_sensor.measure_temp()
 
         """NeoPixel"""
         self.np_controller = NeoPixel.NeoPixelController()
@@ -68,7 +70,7 @@ class SIRIUS:
 
         """Beeper"""
         self.beeper = machine.PWM(machine.Pin(17))
-        self.play_tone(frequency=0)
+        self.play_tone(frequency=4_000, duty=4)
         time.sleep_ms(200)
         self.play_tone(frequency=0)
 
@@ -143,7 +145,7 @@ class SIRIUS:
                 "Kontrolle"
             ],
         ]
-        self.current_menu = [2, 2, -1]
+        self.current_menu = [0, -1, -1]
         self.current_menu_str: str = self.menu_order[0][-1]
         self.last_current_menu_str: str = None
 
@@ -179,6 +181,7 @@ class SIRIUS:
         self.to_angle: list = self.current_angles
         self.angle_speed: float = 10 # °/s
         self.movement_type = "sinus" # quadrat, sinus
+        self.move_set = "move" # "set" = Fastest with no tick block
 
         """Control"""
         self.allow_remote_control: bool = True
@@ -187,12 +190,14 @@ class SIRIUS:
         """Network and socket"""
         self.socket_thread = None
         self.socket_class = None
-        self.socket_data_queue: list = []
+        self.socket_data_queue: list = [["angles", "move", [0, [10, 60, 0]]], ["angles", "set", [0, [0, 0, 0]]]]
+
+        """Update Tick"""
+        self.last_update_tick_time: float = time.ticks_ms()
 
     # Debug
     def Log(self, message: str, type: int = 0):
         ## type: 0 = LOG, 1 = Warning, 2 = Error
-
         print(f""
               f"[{time.ticks_ms() / 1000:0.1f}] "
               f"[{'INFO' if type == 0 else 'WARNING' if type == 1 else 'ERROR'}] "
@@ -202,7 +207,7 @@ class SIRIUS:
     """Init"""
 
     def start_init(self):
-        TOTAL = 10
+        TOTAL = 4
 
         # start all timer
         self.show_loading(message="Starte Timer", total=TOTAL, current=0)
@@ -215,7 +220,7 @@ class SIRIUS:
         # 0 positon
         self.show_loading(message="0er Position", total=TOTAL, current=2)
         self.to_angle = [0, [0, 0, 0]]
-        self.current_angles = [0, [10, 10, 10]]
+        self.move_set = "move"
         self.move_angles(None)
 
         # thread
@@ -733,6 +738,7 @@ class SIRIUS:
                 _, pressed = self.get_pressed_button()
                 if pressed is not None:
                     if pressed == "enter":
+                        self.move_set = "move"
                         self.to_angle = angles
                         self.auto_run_movement()
                         time.sleep_ms(500)
@@ -890,15 +896,16 @@ class SIRIUS:
                 self.run_selected_function(self.current_menu_str.split(" ")[1])
 
             # draw menu (if needed)
-            self.draw_menu_str()
-            self.last_current_menu_str = self.current_menu_str
+            if self.allow_local_control:
+                self.draw_menu_str()
+                self.last_current_menu_str = self.current_menu_str
 
     """Timer"""
 
     def start_all_timer(self):
         # temp_timer
         self.temperatur_timer = machine.Timer(1)
-        self.temperatur_timer.init(period=1000, mode=machine.Timer.ONE_SHOT, callback=self.Timer1)
+        self.temperatur_timer.init(period=1500, mode=machine.Timer.ONE_SHOT, callback=self.Timer1)
 
         # emergenc button
         self.emergency_button_timer = machine.Timer(3) # Timer 2 is used for movement
@@ -911,9 +918,9 @@ class SIRIUS:
         # check if button is tuned off (= Emergency stop)
         if not self.read_emergency_button_value():
             self.emergency_stop()
-
+        # check if temperature is too high
         elif self.all_temps["max"] >= self.max_temp:
-            self.emergency_stop(True)
+            self.emergency_stop(intense_beep=True)
 
         self.emergency_button_timer.init(period=100, mode=machine.Timer.ONE_SHOT, callback=self.Timer_3)
 
@@ -1046,14 +1053,27 @@ class SIRIUS:
 
     def move_angles(self, _):
         self.Log("Starting movement...")
+
+        total_start_time: float = time.ticks_ms()
+
+        # <editor-fold desc="BASE MOVEMENT">
+        self.Log("Moving Stepper...")
+        base_dir = -1 if self.to_angle[0] > self.current_angles[0] else 1
+        self.tmc.set_dir(base_dir)
+        time.sleep_ms(50)
+        self.tmc.run_steps_by_angle(self.to_angle[0], self.current_angles[0], 2_500)
+        # </editor-fold>
+
+
+        # <editor-fold desc="SERVO MOVEMENT">
+        self.Log("Moving Servo...")
         # calculate all distances
-        base_distance = self.to_angle[0] - self.current_angles[0]
         angle_1_distance = self.to_angle[1][0] - self.current_angles[1][0]
         angle_2_distance = self.to_angle[1][1] - self.current_angles[1][1]
         angle_3_distance = self.to_angle[1][2] - self.current_angles[1][2]
 
         # get the biggest distance
-        max_distance = max(abs(base_distance), abs(angle_1_distance), abs(angle_2_distance), abs(angle_3_distance))
+        max_distance = max(abs(angle_1_distance), abs(angle_2_distance), abs(angle_3_distance))
 
         # get time
         time_needed = max_distance / self.angle_speed
@@ -1062,35 +1082,26 @@ class SIRIUS:
 
         # failsafe
         if time_needed <= 0:
-            return
+            self.current_angles = self.to_angle
+            time_needed = 1 # important to do not throw any error
 
         # get degree per seconds
-        base_degree_per_seconds = 0 if base_distance == 0 else base_distance / time_needed / 1000 # °/ms
         angle_1_degree_per_seconds = 0 if angle_1_distance == 0 else angle_1_distance / time_needed / 1000 # °/ms
         angle_2_degree_per_seconds = 0 if angle_2_distance == 0 else angle_2_distance / time_needed / 1000 # °/ms
         angle_3_degree_per_seconds = 0 if angle_3_distance == 0 else angle_3_distance / time_needed / 1000 # °/ms
 
         # direction
         angle_1_dir = -1 if self.to_angle[1][0] > self.current_angles[1][0] else 1
-        base_dir = -1 if self.to_angle[0] > self.current_angles[0] else 1
-
-        # stepper direction
-        self.tmc.set_dir(base_dir)
 
         # stepper step-speed
         step_speed = 1_000 # us
 
         # start values
         percentage = 0
-
-        base_angle: float = self.current_angles[0]
         angle_1_angle: float = self.current_angles[1][0]
         angle_2_angle: float = self.current_angles[1][0]
         angle_3_angle: float = self.current_angles[1][0]
 
-        add_base_degree: float = 0
-
-        start_time: float = time.ticks_ms()
 
         def linear_percentage(t):
             p = t / time_needed_ms
@@ -1110,8 +1121,8 @@ class SIRIUS:
                 return 1
             return 0.5 * math.sin((p - 0.5) * (2 * math.pi / 2)) + 0.5
 
+        start_time: float = time.ticks_ms()
         while self.current_angles != self.to_angle:
-
 
             # get percentage
             if self.movement_type == "linear":
@@ -1122,35 +1133,26 @@ class SIRIUS:
                 percentage = sinus_percentage((time.ticks_ms() - start_time))
 
             # calculate a new angle based on mode
-            add_base_degree = (self.current_angles[0] + base_distance * percentage) - base_angle
-            base_angle += add_base_degree
             angle_1_angle = self.current_angles[1][0] + angle_1_distance * percentage
-            angle_2_angle = self.current_angles[1][0] + angle_2_distance * percentage
-            angle_3_angle = self.current_angles[1][0] + angle_3_distance * percentage
+            angle_2_angle = self.current_angles[1][1] + angle_2_distance * percentage
+            angle_3_angle = self.current_angles[1][2] + angle_3_distance * percentage
 
             # check if destination reached
-            if percentage == 1:
-                self.current_angles[1] = self.to_angle[1]
-                angle_1_angle, angle_2_angle,angle_3_angle = self.to_angle[1]
-
-                self.current_angles[0] = base_angle
-                self.to_angle[0] = base_angle
+            if percentage >= 1:
+                self.current_angles = self.to_angle
 
             # update positon servo
             self.sd.set_servo_to(num=0, degree=angle_1_angle)
             self.sd.set_servo_to(num=1, degree=angle_2_angle)
             self.sd.set_servo_to(num=2, degree=angle_3_angle)
 
-            # update positon stepper
-            self.tmc.run_steps_by_angle(abs(add_base_degree), step_speed)
-            time.sleep_ms(5)
-
             # run timers
             if self.measure_temp:
                 self.read_and_analyse_temp()
 
 
-        self.Log(f"Movement finished in :{time.ticks_ms() - start_time} ms")
+        self.Log(f"Movement finished in :{time.ticks_ms() - total_start_time} ms")
+        # </editor-fold>
 
     def change_movement_type(self):
         new_type = self.choose_menu(
@@ -1170,6 +1172,7 @@ class SIRIUS:
 
     def set_position(self, pos:str):
         self.Log(f"Set to pos: {pos}")
+        self.move_set = "move"
 
         if pos == "zero":
             self.to_angle = [0, [0, 0, 0]]
@@ -1185,9 +1188,12 @@ class SIRIUS:
         self.Log("Starting recalibration...")
 
         # stop Motor 2
-        self.sd.set_servo_to(num=0, degree=60)
+        self.to_angle = [0, [60, 0, 60]]
+        self.move_set = "move"
+
+        self.move_angles(True)
+
         self.sd.set_channel_duty(channel_num=1, duty_num=0)
-        self.sd.set_servo_to(num=2, degree=60)
         self.tmc.turn_off()
 
         # show info
@@ -1228,6 +1234,45 @@ class SIRIUS:
         # deactivate Steppers
         self.tmc.turn_off()
 
+    def set_servo_angles_instant(self):
+        self.sd.set_servo_to(num=0, degree=self.to_angle[1][0])
+        self.sd.set_servo_to(num=1, degree=self.to_angle[1][0])
+        self.sd.set_servo_to(num=2, degree=self.to_angle[1][0])
+
+        # update positon stepper
+        base_dir = -1 if self.to_angle[0] > self.current_angles[0] else 1
+        self.tmc.set_dir(base_dir)
+
+        self.tmc.run_steps_by_angle(self.to_angle[0] , self.current_angles[0], 1_000)
+
+    def move_one_tick(self, d_time):
+
+        for a in range(3):
+            # get angle
+            c_angle = self.current_angles[1][a]
+            t_angle = self.to_angle[1][a]
+
+            # check if already done
+            if c_angle == t_angle:
+                continue
+
+            # direction
+            angle_dir = 1 if t_angle > c_angle else -1
+            # new angle
+            n_angle = c_angle + self.angle_speed * d_time * angle_dir
+
+            # check if reached
+            if n_angle >= t_angle and angle_dir == 1:
+                self.current_angles[1][a] = self.to_angle[1][a]
+            elif n_angle <= t_angle and angle_dir == -1:
+                self.current_angles[1][a] = self.to_angle[1][a]
+            else:
+                self.current_angles[1][a] = n_angle
+            # move
+            self.sd.set_servo_to(num=a, degree=n_angle)
+
+
+
     """Control"""
 
     def change_control_permission(self, which:str):
@@ -1238,15 +1283,28 @@ class SIRIUS:
 
         r = self.ask_yes_no(q)
 
-        if which == "local":
-            self.Log(f"Change permission of 'local control'. Old: {self.allow_local_control}")
-            self.allow_local_control = not r
-            self.Log(f"New: {self.allow_local_control}")
+        if which == "local" and r:
+            self.Log(f"Change permission of 'local control' to False")
+            self.allow_local_control = False
 
-        else:
+            # show on screen
+            m1 = "Lokale Kontroller"
+            m2 = "abgeschaltet"
+            self.oled_controller.clear(1)
+            self.oled_controller.draw_text(x=self.x_center_text(m1), y=22, text=m1, color=0)
+            self.oled_controller.draw_text(x=self.x_center_text(m2), y=32, text=m2, color=0)
+            self.oled_controller.show_content()
+
+            self.play_tone(duration=200)
+
+            self.oled_controller.set_contrast(1)
+
+
+        elif r:
             self.Log(f"Change permission of 'remote control'. Old: {self.allow_remote_control}")
-            if r:
-                self.allow_remote_control = not self.allow_remote_control
+
+            self.allow_remote_control = not self.allow_remote_control
+
             self.Log(f"New: {self.allow_remote_control}")
 
     """Network"""
@@ -1261,17 +1319,69 @@ class SIRIUS:
     def add_to_data_queue(self, new_data):
         self.socket_data_queue.append(new_data)
 
+    def run_data_queue(self):
+        data_queue_copy = self.socket_data_queue.copy()
+
+        # check if something is in data queue
+        if len(data_queue_copy) > 0:
+            data_to_process = data_queue_copy[0]
+
+            # set new angles
+            if data_to_process[0] == "angles":
+                # instant
+                if data_to_process[1] == "set":
+                    self.to_angle = data_to_process[2]
+                    self.move_set = "set"
+                # move
+                elif data_to_process[1] == "move":
+                    self.to_angle = data_to_process[2]
+                    self.move_set = "move"
+
+            # delete first
+            self.socket_data_queue.pop(0)
+
     """Auto mode"""
 
     def run_everything(self):
+        self.last_update_tick_time = time.ticks_ms()
+        time.sleep_ms(1)
         while True:
-            self.check_input_and_draw()
+            # get tick time
+            d_time = time.ticks_ms() - self.last_update_tick_time
+            self.last_update_tick_time = time.ticks_ms()
+
+
+            # run inputs
+            if self.allow_local_control:
+                self.check_input_and_draw()
+
+            self.run_data_queue()
+
+            # run movement
+            if self.to_angle != self.current_angles:
+
+                # smooth movement
+                if self.move_set == "move":
+                    self.auto_run_movement(start_delay=200)
+                    time.sleep_ms(203)
+                    self.last_current_menu_str = ""
+                    self.last_update_tick_time = time.ticks_ms()
+
+                # linear "set" movement
+                elif self.move_set == "set":
+                    self.move_one_tick(d_time / 1_000)
+
+                # not found
+                else:
+                    self.Log(f"No move_set called {self.move_set}", 1)
+                    self.move_set = "move"
 
             # run timers
             if self.measure_temp:
                 self.read_and_analyse_temp()
 
-            time.sleep_ms(10)
+            time.sleep_ms(max(0, 5 - d_time))
+
 
 if __name__ == '__main__':
     sirius_controller = SIRIUS()

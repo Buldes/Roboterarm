@@ -53,6 +53,10 @@ QWidget{
     background-color: rgb(51, 171, 0);
 }
 
+#under_field_title {
+    font-size: 15px;
+    margin: 10px;
+}
 /* FIELD 1 */
 #title_name {
     font-size: 20px;
@@ -60,10 +64,6 @@ QWidget{
 }
 
 /*FIELD 2*/
-#vector_title {
-    font-size: 15px;
-    margin: 10px;
-}
 
 #exit_button{
     font-size: 15px;
@@ -75,12 +75,12 @@ QWidget{
     font-family: "Tektur";
     font-size: 15px;
 }
-#logging_label[type="LOG"] {
+#logging_label[type="L"] {
     color: rgb(0, 182, 0);
 }
-#logging_label[type="WARNING"] {
+#logging_label[type="W"] {
     color: rgb(179, 182, 0);
 }
-#logging_label[type="ERROR"] {
+#logging_label[type="F"] {
     color: rgb(182, 0, 0);
 }
