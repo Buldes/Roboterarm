@@ -7,7 +7,7 @@ Dies ist der Quellcode für die praktische Umsetzung meiner Facharbeit. Der Foku
 ## Ressourcen & Dokumentation
 | Inhalt | Link |
 | :--- | :--- |
-| **SharePoint Ordner** | [Hier klicken](https://ebgsdinslaken-my.sharepoint.com/:f:/g/personal/kevin_moenig_ebgs_info/...) |
+| **SharePoint Ordner** | [Hier klicken](https://ebgsdinslaken-my.sharepoint.com/:f:/g/personal/kevin_moenig_ebgs_info/IgBN8jIubz5cSIsgGcK1gndsAbF2CawToUWLKEjwtzyjZkc?e=eBSeuB) |
 | **Simulation (GitHub)** | [Repository ansehen](https://github.com/Buldes/Roboterarm_Simulation) |
 
 > **Hinweis:** Der SharePoint-Ordner enthält die Facharbeit, Schaltpläne, Vorschauen und Zeichnungen.
@@ -56,7 +56,7 @@ This is the source code for the practical implementation of my term paper. The f
 ## Resources & Documentation
 | Inhalt | Link |
 | :--- | :--- |
-| **SharePoint Folder** | [Click here](https://ebgsdinslaken-my.sharepoint.com/:f:/g/personal/kevin_moenig_ebgs_info/...) |
+| **SharePoint Folder** | [Click here](https://ebgsdinslaken-my.sharepoint.com/:f:/g/personal/kevin_moenig_ebgs_info/IgBN8jIubz5cSIsgGcK1gndsAbF2CawToUWLKEjwtzyjZkc?e=eBSeuB) |
 | **Simulation (GitHub)** | [View repository](https://github.com/Buldes/Roboterarm_Simulation) |
 
 > **Note:** The SharePoint folder contains the term paper, circuit diagrams, previews, and drawings.
