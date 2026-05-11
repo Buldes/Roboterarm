@@ -1,10 +1,11 @@
 import time
+import math
 from PySide6.QtWidgets import QMainWindow, QWidget, QPushButton, QApplication, QVBoxLayout, QHBoxLayout, QLabel, QGridLayout, QButtonGroup, QLineEdit,QStackedWidget,QSizePolicy
 import sys
 from qt_material import apply_stylesheet
 import os
-from PySide6.QtCore import QPropertyAnimation, Property, QEasingCurve, Qt, QThread, QTimer, QRunnable, QObject, Signal, QThreadPool, Slot, QMutex, QSize
-from PySide6.QtGui import QFontDatabase
+from PySide6.QtCore import QPropertyAnimation, Property, QEasingCurve, Qt, QThread, QTimer, QRunnable, QObject, Signal, QThreadPool, Slot, QMutex, QSize, QRectF, QPointF
+from PySide6.QtGui import QFontDatabase, QPainter, QColor, QPen, QBrush
 from inputs import get_gamepad, UnpluggedError
 import datetime
 import Kinematic_Engine
@@ -89,7 +90,7 @@ class ControllerInput(QThread):
             self.controller_logging_output.emit(0, f"Es trat ein Fehler auf: {e}", 1)
 
 class WorkerSignal(QObject):
-    finished = Signal(object, str)
+    finished = Signal(object, str, object)
     error = Signal(str, int)
 
 class CalculateNewAngles(QRunnable):
@@ -103,10 +104,10 @@ class CalculateNewAngles(QRunnable):
     @Slot()
     def run(self):
         try:
-
             result = self.kinematics.calc_angle_by_normalized(self.data[0], self.data[1], self.data[2])
 
-            self.signals.finished.emit(result, self.move_type)
+            self.signals.finished.emit(result, self.move_type, self.data)
+
         except Exception as e:
             self.signals.error.emit(str(e), 2)
 
@@ -207,7 +208,6 @@ class SocketThread(QThread):
         # stop
         self.socket.close()
 
-
 class AspectRatioSvgWidget(QSvgWidget):
     def __init__(self, file_path, ratio=1.0):
         super().__init__(file_path)
@@ -222,7 +222,232 @@ class AspectRatioSvgWidget(QSvgWidget):
 
     def sizeHint(self):
         w = self.width()
+
         return QSize(w, int(w * self.ratio))
+
+class RobotArmCanvas(QWidget):
+    def __init__(self, is_active: bool = True):
+        super().__init__()
+
+        self.is_active = is_active
+
+        self.angles = [0, [10, 30, 50]]
+        self.vector = [0, 0, 0]
+
+        # color
+        self.yellow = QColor(255, 255, 0, 255)
+        self.transparent_yellow = QColor(255, 255, 0, 100)
+        self.orange = QColor(255, 125, 0, 255)
+
+        # dimensions
+        self.c_width, self.c_height = self.width(), self.height()
+
+        self.segment_length = 200
+        self.ankle_radius = [30, 35, 30]
+
+        # for draw
+        self.start_point = [self.c_width // 2, 0]
+        self.segment_cords: list = []
+
+        self.base_start_point = [self.c_width // 4, self.c_height // 2]
+        self.base_dimensions = [150, 15] # LENGTH, TRIANGLE
+
+        self.vector_dimension = [5, 10]
+
+        self.vector_pos = [[0, 0], [0, 0]]
+
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.game_tick)
+        self.timer.start(16)
+
+    def get_cord_by_angle(self, angle, length):
+
+        angle = angle * (math.pi / 180)
+        x = math.sin(angle) * length
+        y = math.cos(angle) * length
+        return [int(-x), int(y)]
+
+    def draw_x_at_pos(self, painter, pos):
+        x1 = pos[0] + self.vector_dimension[1] // 2
+        x2 = pos[0] - self.vector_dimension[1] // 2
+        y1 = pos[1] + self.vector_dimension[1] // 2
+        y2 = pos[1] - self.vector_dimension[1] // 2
+        painter.drawLine(x1, y1, x2, y2)
+        painter.drawLine(x1, y2, x2, y1)
+
+    def game_tick(self):
+
+        if not self.is_active:
+            return
+
+        # <editor-fold desc="ARMS">
+        # dimensions and start
+        self.c_width, self.c_height = self.width(), self.height()
+        self.start_point = [self.c_width // 2, self.ankle_radius[1]]
+
+        # delete everything before
+        self.segment_cords = []
+        # add start pos
+        self.segment_cords.append(self.start_point)
+
+        # add all other pos
+        for i in range(3):
+            
+            total_angle = sum(self.angles[1][0:i+1])
+
+            n_cords = self.get_cord_by_angle(total_angle, self.segment_length)
+
+            with_before = [n_cords[0] + self.segment_cords[i][0],
+                           n_cords[1] + self.segment_cords[i][1]]
+            self.segment_cords.append(with_before)
+
+        # add vector
+        normal_distance_to_base = min(math.sqrt(self.vector[0]**2 + self.vector[2] ** 2), 1)
+
+        self.vector_pos[0] = [
+            self.start_point[0] - normal_distance_to_base * self.segment_length * 3,
+            self.start_point[1] + self.vector[1] * self.segment_length * 3
+        ]
+
+        # </editor-fold>
+
+        # <editor-fold desc="BASE">
+        self.base_start_point = [self.c_width - self.c_width // 4, self.c_height // 2]
+
+        self.vector_pos[1] = [
+            self.base_start_point[0] + self.vector[2] * self.base_dimensions[0],
+            self.base_start_point[1] - self.vector[0] * self.base_dimensions[0]
+        ]
+        # </editor-fold>
+
+        self.update()
+
+    def paintEvent(self, event, /):
+        painter = QPainter(self)
+
+        # flip along X
+        painter.save()
+        painter.translate(self.width(), self.height())
+        painter.scale(-1, -1)
+
+        # AA
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        """DRAW"""
+        # BG
+        painter.fillRect(self.rect(), QColor("#1a1a1a"))
+
+        # set pen
+        normal_pen = QPen(self.yellow)
+        normal_pen.setWidth(3)
+
+        line_pen = QPen(self.yellow)
+        line_pen.setWidth(self.ankle_radius[2])
+        line_pen.setCapStyle(Qt.RoundCap)
+
+        thin_line_pen = QPen(self.yellow)
+        thin_line_pen.setWidth(1)
+
+        background_pen = QPen(QColor("#1a1a1a"))
+        background_pen.setWidth(3)
+        background_brush = QBrush(QColor("#1a1a1a"))
+
+        vector_pen = QPen(self.orange)
+        vector_pen.setWidth(self.vector_dimension[0])
+        vector_pen.setCapStyle(Qt.RoundCap)
+
+        painter.setPen(normal_pen)
+
+        brush = QBrush(self.transparent_yellow)
+        painter.setBrush(brush)
+
+        # <editor-fold desc="DRAW ARMS">
+        """draw arms"""
+        painter.setPen(line_pen)
+        for i in range(3):
+            p1 = self.segment_cords[i]
+            p2 = self.segment_cords[i + 1]
+            painter.drawLine(p1[0], p1[1], p2[0], p2[1])
+
+        # Draw ankles
+        ## 1. remove circle
+        painter.setPen(background_pen)
+        painter.setBrush(background_brush)
+        for i in range(3):
+            x, y = self.segment_cords[i]
+            painter.drawEllipse(
+                QPointF(x, y),
+                self.ankle_radius[1], self.ankle_radius[1])
+
+        ## draw ankle as circle
+        painter.setPen(normal_pen)
+        painter.setBrush(brush)
+        for i in range(3):
+            x, y = self.segment_cords[i]
+            r = self.ankle_radius[0]
+            point = QPointF(x, y)
+            painter.drawEllipse(point, r, r)
+
+            ## draw description
+            painter.save()
+            painter.translate(x, y)
+            painter.scale(-1, -1) # to negate the flip of the canvas
+
+            text_rect = QRectF(-r, -r, 2 * r, 2 * r)
+            painter.drawText(text_rect, Qt.AlignCenter, f"{int(self.angles[1][i])}°")
+
+            painter.restore()
+        # </editor-fold>
+
+        # <editor-fold desc="DRAW BASIS">
+        """draw basis"""
+        ## lines
+        painter.setPen(thin_line_pen)
+        p1 = [
+            [self.base_start_point[0] - self.base_dimensions[0], self.base_start_point[1]],
+            [self.base_start_point[0], self.base_start_point[1] - self.base_dimensions[0]]
+        ]
+        p2 = [
+            [self.base_start_point[0] + self.base_dimensions[0], self.base_start_point[1]],
+            [self.base_start_point[0], self.base_start_point[1] + self.base_dimensions[0]]
+        ]
+        for i in range(len(p1)):
+            painter.drawLine(p1[i][0], p1[i][1], p2[i][0], p2[i][1])
+
+        ## arc
+        rect = QRectF(p1[0][0], p1[1][1], self.base_dimensions[0] * 2, self.base_dimensions[0] * 2)
+        start_angle = -self.angles[0] + 360 + 90
+        span_angle = self.angles[0]
+        painter.drawPie(rect, int(start_angle * 16), int(span_angle * 16)) # Qt uses mor steps per degree
+
+        ## arrow at bottom
+        painter.drawPolygon([QPointF(self.base_start_point[0], p1[1][1]),
+                             QPointF(self.base_start_point[0] + self.base_dimensions[1], p1[1][1] - self.base_dimensions[1] // 0.7),
+                             QPointF(self.base_start_point[0] - self.base_dimensions[1], p1[1][1] - self.base_dimensions[1] // 0.7)])
+
+        ## description
+        painter.save()
+        point_to_write = [self.base_start_point[0], p1[1][1] - self.base_dimensions[1] // 0.7 + 5]
+        painter.translate(point_to_write[0], point_to_write[1])
+        painter.scale(-1, -1) # to negate the flip of the canvas
+
+        text_rect = QRectF(-self.base_dimensions[1], 0, 2 * self.base_dimensions[1], 2 * 20)
+        painter.drawText(text_rect, Qt.AlignCenter, f"{int(self.angles[0])}°")
+
+        painter.restore()
+
+        # </editor-fold>
+
+        # <editor-fold desc="VECTOR">
+        painter.setPen(vector_pen)
+        point_base = (self.vector_pos[1][0], self.vector_pos[1][1])
+        point_arm = (self.vector_pos[0][0], self.vector_pos[0][1])
+        self.draw_x_at_pos(painter, point_arm)
+        self.draw_x_at_pos(painter, point_base)
+        # </editor-fold>
+
+        painter.end()
+
 
 class MainWindow(QMainWindow):
     new_vector = Signal(float, float, float, str)
@@ -297,6 +522,7 @@ class MainWindow(QMainWindow):
         # PERSPECTIVE
         # ORTHOGONAL
         # 2D-ANIMATED
+        self.robot_arm_canvas = None
         # 2D-STATIC
         self.static_svg_widget = None
 
@@ -307,15 +533,18 @@ class MainWindow(QMainWindow):
         self.robot_arm_svg_path = fr"{self.base_path}/assets/img/arm.svg"
 
         # For GUI
-        self.perspective_selected = "perspektive" # orthogonal, 2d-animated, 2d-static
+        self.perspective_selected = "2d-animated" # orthogonal, 2d-animated, 2d-static, perspektive
         self.all_perspectives: dict = ["perspektive", "orthogonal", "2d-animated", "2d-static"]
 
         # FOR VECTOR
-        self.current_vector: list = [0, 1, 0]
+        self.current_vector: list = [0.5, 0.6, 0.2]
+        self.old_vector: list = self.current_vector.copy()
         self.current_angles: list = [0, [0, 0, 0]] # [base_rotation, joint_rotation]
 
         """CALCULATIONS"""
         self.kinematics = Kinematic_Engine.Kinematik_Engine(total_length=45)
+        self.kinematics.max_length = 1
+        self.kinematics.angle_change = 0.1
 
         # <editor-fold desc="SETUP">
         """SETUP"""
@@ -464,7 +693,7 @@ class MainWindow(QMainWindow):
             self.field_1_layout.addWidget(btn, 1, i)
             self.perspective_button_group.addButton(btn, i)
 
-        self.perspective_buttons[3].setChecked(True)
+        self.perspective_buttons[2].setChecked(True)
 
     def setup_field_2(self):
         # title
@@ -601,7 +830,7 @@ class MainWindow(QMainWindow):
         self.field5_stacked_widget.addWidget(self.animated_tab)
         self.field5_stacked_widget.addWidget(self.static_tab)
 
-        self.field5_stacked_widget.setCurrentIndex(3)
+        self.field5_stacked_widget.setCurrentIndex(2)
 
         self.field_5_layout.addWidget(self.field5_stacked_widget, 0, 0)
 
@@ -627,6 +856,8 @@ class MainWindow(QMainWindow):
                                              f"Y:  {self.current_vector[1]:.2f}\n"
                                              f"Z:  {self.current_vector[2]:.2f}")
 
+        self.robot_arm_canvas.vector = self.current_vector.copy()
+
         # real
         x_real = self.kinematics.normalized_to_real(self.current_vector[0])
         y_real = self.kinematics.normalized_to_real(self.current_vector[1])
@@ -638,9 +869,7 @@ class MainWindow(QMainWindow):
 
     def update_all_vectors(self, x, y, z, move_type):
         self.calculate_angle_by_new_vector(new_vec=[x, y, z], move_type=move_type)
-        self.current_vector = [x,y, z]
-
-        self.update_gui_vector()
+        self.current_vector = [x, y, z]
 
     def update_all_angles(self, new_angles,move_type):
         self.current_angles: list = new_angles # [base_rotation, joint_rotation]
@@ -653,11 +882,14 @@ class MainWindow(QMainWindow):
 
         self.angle_labels_values[0].setText(f"{new_angles[0]:.1f}°")
 
+        # update canvas
+        self.robot_arm_canvas.angles = self.current_angles
+
     def set_to_pos(self, pos: int):
         if pos == 0:
-            self.new_vector.emit(1, 0.5, 0, "move")
+            self.new_vector.emit(0.5, 0.62, 0, "move")
 
-    def calculate_angle_by_new_vector(self, new_vec: list, move_type):
+    def calculate_angle_by_new_vector(self, new_vec: list,  move_type):
         if self.worker_is_busy:
             return
 
@@ -665,28 +897,42 @@ class MainWindow(QMainWindow):
         self.calculated_vector = new_vec
 
         worker = CalculateNewAngles(new_vec, self.kinematics, move_type)
+
         worker.signals.finished.connect(self.handle_angle_results)
-        worker.signals.error.connect(lambda err: self.handle_angle_results(f"Fehler beim Berechnen der Winkel: {err}", "", True))
+        worker.signals.error.connect(lambda err: self.handle_angle_results(f"Fehler beim Berechnen der Winkel: {err}", "", None, True))
 
         self.threadpool_kinematics.start(worker)
 
-    def handle_angle_results(self, res, move_type: str = "move", is_error: bool = False):
-        print(res, move_type)
+    def handle_angle_results(self, res, move_type: str = "move", n_vec = None, is_error: bool = False):
+
+
         if res is False: # check if result is False
-            self.log(f"Vektor {self.current_vector} ist nicht erreichbar", 1)
+            self.log(f"Vektor ( {self.current_vector[0]:.1f} | {self.current_vector[1]:.1f} | {self.current_vector[2]:.1f} ) ist nicht erreichbar. "
+                     f"Setze zu ( {self.old_vector[0]:.1f} | {self.old_vector[1]:.1f} | {self.old_vector[2]:.1f} )", 1)
+
+            self.current_vector = self.old_vector
+            self.calculated_vector = self.current_vector.copy()
+
         # check if error
         elif is_error:
             self.log(res, 2)
+            self.current_vector = self.old_vector
+
         # vector is valid
         else:
             self.log("Vektor erreichbar")
             self.new_angles.emit(res, move_type)
+            self.current_vector = n_vec
+            self.old_vector = n_vec
+
+
+        self.update_gui_vector()
 
         # open worker for next one
         self.worker_is_busy = False
 
         # check if calculated vektor is not current vector
-        if self.calculated_vector != self.current_vector:
+        if self.calculated_vector != self.current_vector.copy():
             self.new_vector.emit(self.current_vector[0], self.current_vector[1], self.current_vector[2], move_type)
     # </editor-fold>
 
@@ -706,10 +952,16 @@ class MainWindow(QMainWindow):
         pass
 
     def setup_animated_perspective(self):
-        pass
+        self.robot_arm_canvas = RobotArmCanvas()
+
+        self.animated_layout.addWidget(self.robot_arm_canvas, 0, 0)
 
     def setup_static_perspective(self):
-        self.static_svg_widget = AspectRatioSvgWidget(self.robot_arm_svg_path, ratio=1821 / 1377)
+        ratio = 1821 / 1377
+        width = 400
+
+        self.static_svg_widget = QSvgWidget(self.robot_arm_svg_path)
+        self.static_svg_widget.setFixedSize(int(width * ratio), width)
 
         self.static_layout.addWidget(self.static_svg_widget, 0, 0)
 
@@ -749,7 +1001,7 @@ class MainWindow(QMainWindow):
             return
 
         # var
-        n_vec = self.current_vector
+        n_vec = self.current_vector.copy()
         d_time = time.time() - self.controller_delta_time
 
         # iterate through every joystick input (Only 3 Axis)
@@ -763,7 +1015,11 @@ class MainWindow(QMainWindow):
 
             # calculate add cord
             # **2 to make it increasing by higher value.
-            direction = -1 if c_value < 0 else 1
+            if i != 1:
+                direction = -1 if c_value > 0 else 1
+            else:
+                direction = -1 if c_value < 0 else 1
+
             add_cord = (c_value / 100)**2 * d_time * self.controller_speed * direction
 
 

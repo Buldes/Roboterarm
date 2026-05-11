@@ -11,6 +11,7 @@ class network_and_socket:
         self.port = 4242
         self.socket = None
         self.all_ip_addr: list = []
+        self.last_address = None
         self.is_online = False
 
         self.add_data_queue = add_data_queue
@@ -51,13 +52,14 @@ class network_and_socket:
         self.socket = usocket.socket(usocket.AF_INET, usocket.SOCK_DGRAM)
 
         self.socket.bind(("0.0.0.0", self.port))
-        self.socket.settimeout(0.05)
+        self.socket.settimeout(0.5)
 
         self.is_online = True
 
     def recv_data(self):
         try:
             data, addr = self.socket.recvfrom(1024)
+
         except OSError:
             return False
         # decode message
@@ -67,12 +69,16 @@ class network_and_socket:
         if not addr in self.all_ip_addr:
             self.all_ip_addr.append(addr)
 
+        self.last_address = addr
+
         return message
 
-    def send_message(self, message):
-        for addr in self.all_ip_addr:
-            self.socket.sendto(bytes(message, "utf-8"), addr)
-
+    def send_message(self, message, to_address = "all"):
+        if to_address == "all":
+            for addr in self.all_ip_addr:
+                self.socket.sendto(bytes(message, "utf-8"), addr)
+        else:
+                self.socket.sendto(bytes(message, "utf-8"), to_address)
     def thread_loop(self):
         self.connect_wifi()
         self.activate_socket()
@@ -91,3 +97,9 @@ class network_and_socket:
                 m = m.replace("'", '"')
                 data = json.loads(m)
                 self.add_data_queue(data)
+
+                if len(data) >= 3:
+                    if data[-1] == "confirm":
+                        time.sleep_ms(1)
+                        self.log("Confirm Received")
+                        self.send_message("received", self.last_address)

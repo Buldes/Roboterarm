@@ -22,21 +22,26 @@ class LED_Stripe:
         self.g_pin = Pin(self.g_pin_num, Pin.OUT)
         self.b_pin = Pin(self.b_pin_num, Pin.OUT)
 
-        self.r_pin_pwm = PWM(self.r_pin, freq=self.freq, duty=512)
-        self.g_pin_pwm = PWM(self.g_pin, freq=self.freq, duty=512)
-        self.b_pin_pwm = PWM(self.b_pin, freq=self.freq, duty=512)
+        self.r_pin_pwm = PWM(self.r_pin, freq=self.freq, duty=0)
+        self.g_pin_pwm = PWM(self.g_pin, freq=self.freq, duty=0)
+        self.b_pin_pwm = PWM(self.b_pin, freq=self.freq, duty=0)
+
+        self.set_rgb(0 ,0 ,0)
 
     def set_freq(self, freq: int, pin_str: str="all"):
-        if pin_str == "all":
-            self.r_pin_pwm.freq(freq)
-            self.g_pin_pwm.freq(freq)
-            self.b_pin_pwm.freq(freq)
-        elif pin_str == "r":
-            self.r_pin_pwm.freq(freq)
-        elif pin_str == "g":
-            self.g_pin_pwm.freq(freq)
-        elif pin_str == "b":
-            self.b_pin_pwm.freq(freq)
+        self.freq = freq
+
+        if pin_str == "all" or pin_str == "r":
+            self.r_pin_pwm.deinit()
+            self.r_pin_pwm = PWM(self.r_pin, freq=self.freq, duty=512)
+
+        if pin_str == "all" or pin_str == "g":
+            self.g_pin_pwm.deinit()
+            self.g_pin_pwm = PWM(self.g_pin, freq=self.freq, duty=512)
+
+        if pin_str == "all" or pin_str == "b":
+            self.b_pin_pwm.deinit()
+            self.b_pin_pwm = PWM(self.b_pin, freq=self.freq, duty=512)
 
     def value_to_duty(self, r):
         return int(1023 * (r / 255))

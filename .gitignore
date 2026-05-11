@@ -181,9 +181,12 @@ cython_debug/
 .cursorindexingignore
 /ESP32-Micropython_Installation/
 /.idea
-/.idea
-/.idea
 .idea/misc.xml
 *.iml
 *.xml
-/.idea
+.idea
+.idea/
+/Client_Side/.idea
+.idea/Roboterarm.iml
+.idea/misc.xml
+.idea/micropython-tools-settings.xml
