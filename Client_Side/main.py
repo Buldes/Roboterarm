@@ -4,8 +4,8 @@ from PySide6.QtWidgets import QMainWindow, QWidget, QPushButton, QApplication, Q
 import sys
 from qt_material import apply_stylesheet
 import os
-from PySide6.QtCore import QPropertyAnimation, Property, QEasingCurve, Qt, QThread, QTimer, QRunnable, QObject, Signal, QThreadPool, Slot, QMutex, QSize, QRectF, QPointF
-from PySide6.QtGui import QFontDatabase, QPainter, QColor, QPen, QBrush
+from PySide6.QtCore import QPropertyAnimation, Property, QEasingCurve, Qt, QThread, QTimer, QRunnable, QObject, Signal, QThreadPool, Slot, QMutex, QSize, QRectF, QPointF, QLocale
+from PySide6.QtGui import QFontDatabase, QPainter, QColor, QPen, QBrush,QDoubleValidator
 from inputs import get_gamepad, UnpluggedError
 import datetime
 import Kinematic_Engine
@@ -226,13 +226,15 @@ class AspectRatioSvgWidget(QSvgWidget):
         return QSize(w, int(w * self.ratio))
 
 class RobotArmCanvas(QWidget):
-    def __init__(self, is_active: bool = True):
+    def __init__(self, is_active: bool = True, is_static: bool = False):
         super().__init__()
 
         self.is_active = is_active
+        self.is_static = is_static
+        self.first_time: bool = True
 
-        self.angles = [0, [10, 30, 50]]
-        self.vector = [0, 0, 0]
+        self.angles = [90, [0.1, 29.8, 60.5]]
+        self.vector = [0, 0.62, 0.5]
 
         # color
         self.yellow = QColor(255, 255, 0, 255)
@@ -258,7 +260,10 @@ class RobotArmCanvas(QWidget):
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.game_tick)
-        self.timer.start(16)
+        if self.is_static:
+            self.timer.start(2_000)
+        else:
+            self.timer.start(16)
 
     def get_cord_by_angle(self, angle, length):
 
@@ -394,7 +399,11 @@ class RobotArmCanvas(QWidget):
             painter.scale(-1, -1) # to negate the flip of the canvas
 
             text_rect = QRectF(-r, -r, 2 * r, 2 * r)
-            painter.drawText(text_rect, Qt.AlignCenter, f"{int(self.angles[1][i])}°")
+
+            if self.is_static:
+                painter.drawText(text_rect, Qt.AlignCenter, f"a{i}")
+            else:
+                painter.drawText(text_rect, Qt.AlignCenter, f"{int(self.angles[1][i])}°")
 
             painter.restore()
         # </editor-fold>
@@ -431,8 +440,11 @@ class RobotArmCanvas(QWidget):
         painter.translate(point_to_write[0], point_to_write[1])
         painter.scale(-1, -1) # to negate the flip of the canvas
 
-        text_rect = QRectF(-self.base_dimensions[1], 0, 2 * self.base_dimensions[1], 2 * 20)
-        painter.drawText(text_rect, Qt.AlignCenter, f"{int(self.angles[0])}°")
+        text_rect = QRectF(-self.base_dimensions[1] - 10, 0, 2 * self.base_dimensions[1] + 20, 2 * 20)
+        if self.is_static:
+            painter.drawText(text_rect, Qt.AlignCenter, f"Basis")
+        else:
+            painter.drawText(text_rect, Qt.AlignCenter, f"{int(self.angles[0])}°")
 
         painter.restore()
 
@@ -496,6 +508,7 @@ class MainWindow(QMainWindow):
         self.vector_input_fields = None
         self.vector_input_title = None
         self.vector_input_btn = None
+        self.vector_input_type: list = []
 
         # ALL FIELD 3
         self.title_label_field3 = None
@@ -723,15 +736,38 @@ class MainWindow(QMainWindow):
         self.vector_input_label = [QLabel("X:"), QLabel("Y:"), QLabel("Z:")]
         self.vector_input_fields = [QLineEdit(), QLineEdit(), QLineEdit()]
 
+        float_validator = QDoubleValidator()
+        float_validator.setLocale(QLocale(QLocale.English, QLocale.UnitedStates))
+        float_validator.setNotation(QDoubleValidator.StandardNotation)
+
         for i, cord in enumerate(["X", "Y", "Z"]):
             self.vector_input_fields[i].setPlaceholderText(f"[{cord}-Wert eingeben]")
+            self.vector_input_fields[i].setValidator(float_validator)
 
         for x, column in enumerate([self.vector_input_label, self.vector_input_fields]):
             for i in range(len(self.vector_input_label)):
                 self.field_2_layout.addWidget(column[i], 4 + i, x, 1, 1)
 
+        self.vector_input_type = [
+            QButtonGroup(self),
+            QPushButton("real"),
+            QPushButton("normal"),
+            "real"
+        ]
+
+        self.vector_input_type[0].idClicked.connect(lambda i: self.vector_input_click(i, 0))
+
+        for i in range(2):
+            btn = self.vector_input_type[i + 1]
+            btn.setCheckable(True)
+            self.field_2_layout.addWidget(btn, 7, i, 1, 1)
+            self.vector_input_type[0].addButton(btn, i)
+
+        self.vector_input_type[1].setChecked(True)
+
         self.vector_input_btn = QPushButton("Bestätigen")
-        self.field_2_layout.addWidget(self.vector_input_btn, 7, 0, 1, 2)
+        self.vector_input_btn.clicked.connect(lambda _: self.vector_input_click(None, 1))
+        self.field_2_layout.addWidget(self.vector_input_btn, 8, 0, 1, 2)
 
         # vector label
         self.vector_label_title = QLabel("aktueller Vektor".upper())
@@ -742,11 +778,11 @@ class MainWindow(QMainWindow):
         self.vector_label_real_title = QLabel("Real")
         self.vector_label_real = QLabel("X:  -.-- \nY:  -.-- \nZ:  -.--")
 
-        self.field_2_layout.addWidget(self.vector_label_title, 8, 0, 1, 2)
-        self.field_2_layout.addWidget(self.vector_label_normalized_title, 9, 0, 1, 1)
-        self.field_2_layout.addWidget(self.vector_label_normalized, 9, 1, 1, 1)
-        self.field_2_layout.addWidget(self.vector_label_real_title, 10, 0, 1, 1)
-        self.field_2_layout.addWidget(self.vector_label_real, 10, 1, 1, 1)
+        self.field_2_layout.addWidget(self.vector_label_title, 9, 0, 1, 2)
+        self.field_2_layout.addWidget(self.vector_label_normalized_title, 10, 0, 1, 1)
+        self.field_2_layout.addWidget(self.vector_label_normalized, 10, 1, 1, 1)
+        self.field_2_layout.addWidget(self.vector_label_real_title, 11, 0, 1, 1)
+        self.field_2_layout.addWidget(self.vector_label_real, 11, 1, 1, 1)
 
         # set last row
         last_row = self.field_2_layout.rowCount()
@@ -760,7 +796,7 @@ class MainWindow(QMainWindow):
 
     def setup_field_3(self):
         self.title_label_field3 = QLabel("Output".upper())
-        self.title_label_field3.setObjectName("under_field_title")
+        self.title_label_field3.setObjectName("field_title_label")
         self.field_3_layout.addWidget(self.title_label_field3, 0, 0, 1 ,2)
 
         # all angles
@@ -782,7 +818,7 @@ class MainWindow(QMainWindow):
 
         # status
         self.socket_status_title = QLabel("SOCKET STATUS")
-        self.socket_status_title.setObjectName("field_title_label")
+        self.socket_status_title.setObjectName("under_field_title")
         self.field_3_layout.addWidget(self.socket_status_title, 6, 0, 1, 2)
 
         self.socket_status_names = [QLabel("Client"), QLabel("Server"), QLabel("Ping")]
@@ -833,7 +869,6 @@ class MainWindow(QMainWindow):
         self.field5_stacked_widget.setCurrentIndex(2)
 
         self.field_5_layout.addWidget(self.field5_stacked_widget, 0, 0)
-
 
     def load_all_fonts(self):
         for f in ["Sixtyfour-Regular", "Jersey10-Regular", "Tektur-Regular"]:
@@ -957,13 +992,9 @@ class MainWindow(QMainWindow):
         self.animated_layout.addWidget(self.robot_arm_canvas, 0, 0)
 
     def setup_static_perspective(self):
-        ratio = 1821 / 1377
-        width = 400
+        self.static_svg_widget = RobotArmCanvas(is_static=True)
 
-        self.static_svg_widget = QSvgWidget(self.robot_arm_svg_path)
-        self.static_svg_widget.setFixedSize(int(width * ratio), width)
-
-        self.static_layout.addWidget(self.static_svg_widget, 0, 0)
+        self.static_layout.addWidget(self.static_svg_widget, 0, 0, 1, 1)
 
     # <editor-fold desc="X-BOX CONTROLLER">
     """X-BOX CONTROLLER"""
@@ -1102,6 +1133,25 @@ class MainWindow(QMainWindow):
         self.socket_status_status[2].style().unpolish(self.socket_status_status[2])
         self.socket_status_status[2].style().polish(self.socket_status_status[2])
 
+    """USER INPUT"""
+
+    def vector_input_click(self, data, type: int):
+        if type == 0: # change if real or normal
+            self.vector_input_type[3] = "real" if data == 0 else "normal"
+        else: # vector accepted
+            data = [
+                float(self.vector_input_fields[0].text()),
+                float(self.vector_input_fields[1].text()),
+                float(self.vector_input_fields[2].text()),
+            ]
+            if self.vector_input_type[3] == "real":
+                data = [
+                    data[0] /  45,
+                    data[1] /  45,
+                    data[2] /  45,
+                ]
+
+            self.new_vector.emit(data[0], data[1], data[2], "move")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
