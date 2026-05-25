@@ -4,6 +4,12 @@ Dies ist der Quellcode für die praktische Umsetzung meiner Facharbeit. Der Foku
 
 <br><br>
 
+## Vorschau
+<img src="/preview/sirius/img.jpg" alt="Vorschau Bild" width="300">
+<img src="/preview/sirius/preview_box.gif" alt="Vorschau Bild" width="300">
+
+<br><br>
+
 ## Ressourcen & Dokumentation
 | Inhalt | Link |
 | :--- | :--- |
@@ -50,6 +56,12 @@ Für die Steuerung des IR-Sensors wird das Script `nec.py` von Peter Hinch verwe
 
 # Roboterarm (EN)
 This is the source code for the practical implementation of my term paper. The focus lies on the derivation of a mathematical algorithm for calculating **target angles** based on a target vector (inverse kinematics).
+
+<br><br>
+
+## Preview
+<img src="/preview/sirius/img.jpg" alt="Vorschau Bild" width="300">
+<img src="/preview/sirius/preview_box.gif" alt="Vorschau Bild" width="300">
 
 <br><br>
 
