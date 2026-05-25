@@ -460,7 +460,6 @@ class RobotArmCanvas(QWidget):
 
         painter.end()
 
-
 class MainWindow(QMainWindow):
     new_vector = Signal(float, float, float, str)
     new_angles = Signal(list, str)
@@ -553,6 +552,7 @@ class MainWindow(QMainWindow):
         self.current_vector: list = [0.5, 0.6, 0.2]
         self.old_vector: list = self.current_vector.copy()
         self.current_angles: list = [0, [0, 0, 0]] # [base_rotation, joint_rotation]
+        self.gripper_pos: list = [0, 0]
 
         """CALCULATIONS"""
         self.kinematics = Kinematic_Engine.Kinematik_Engine(total_length=45)
@@ -582,11 +582,17 @@ class MainWindow(QMainWindow):
         self.controller_speed: float = 2
         self.controller_delta_time: float = -1
         self.last_controller_joystick_input: list = [0, 0, 0, 0]
+        self.current_button_pressed: set = set()
 
         self.loop_joystick_input = QTimer(self)
         self.loop_joystick_input.timeout.connect(self.calc_new_vector_by_joystick)
         self.loop_joystick_input.setInterval(10)
         self.loop_joystick_input.start()
+
+        self.loop_controller_button_pressed = QTimer(self)
+        self.loop_controller_button_pressed.timeout.connect(self.loop_button_pressed)
+        self.loop_controller_button_pressed.setInterval(10)
+        self.loop_controller_button_pressed.start()
 
         self.controller_thread = ControllerInput()
         self.controller_thread.controller_signal.connect(self.handle_controller_input)
@@ -999,6 +1005,11 @@ class MainWindow(QMainWindow):
     # <editor-fold desc="X-BOX CONTROLLER">
     """X-BOX CONTROLLER"""
 
+    def loop_button_pressed(self):
+        for code in self.current_button_pressed:
+            if code in ["ABS_Z", "ABS_RZ", "BTN_TL", "BTN_TR"]:
+                self.controller_input_gripper(code)
+
     def handle_controller_input(self, ev_type, code, state):
         if self.controller_is_connected != 1:
             return
@@ -1013,8 +1024,35 @@ class MainWindow(QMainWindow):
                     self.last_controller_joystick_input[1] = state
                 case "ABS_RX":
                     self.last_controller_joystick_input[3] = state
+        elif code in ["ABS_Z", "ABS_RZ", "BTN_TL", "BTN_TR"]:
+            if state > 0 and code in ["BTN_TL", "BTN_TR"]:
+                self.current_button_pressed.add(code)
+            elif state > 100 and code in ["ABS_Z", "ABS_RZ"]:
+                self.current_button_pressed.add(code)
+            else:
+                if code in self.current_button_pressed:
+                    self.current_button_pressed.remove(code)
         else:
             self.log(f"{ev_type, code, state}")
+
+    def controller_input_gripper(self, button_pressed):
+        if button_pressed == "ABS_Z":
+            self.gripper_pos[0] -= 0.01
+        elif button_pressed == "ABS_RZ":
+            self.gripper_pos[0] += 0.01
+        elif button_pressed == "BTN_TL":
+            self.gripper_pos[1] -= 0.3
+        elif button_pressed == "BTN_TR":
+            self.gripper_pos[1] += 0.3
+
+        self.gripper_pos = [
+            min(max(self.gripper_pos[0], 0), 1),
+            min(max(self.gripper_pos[1], -135), 135),
+        ]
+
+        self.socket_thread.feed_data(str(["gripper", self.gripper_pos]))
+
+        self.log(f"Greifer verändert: geschlossen: {self.gripper_pos[0]:.1f}, rotiert: {self.gripper_pos[1]:.1f}")
 
     def calc_new_vector_by_joystick(self):
         if self.controller_is_connected != 1:

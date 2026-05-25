@@ -1103,7 +1103,6 @@ class SIRIUS:
 
         self.slider(max_value=135, min_value=-135, current_value=self.gripper_placement[1], info_text="rotieren", on_change=update_rotate)
 
-
     def open_close_gripper(self, percentage, gripper_rotate):
         # gripper open close
         percentage = min(max(percentage, 0), 1)
@@ -1132,6 +1131,11 @@ class SIRIUS:
                 self.oled_controller.draw_text(x=self.x_center_text(t), y=12 + i * 10, text=t, color=0)
 
             self.oled_controller.show_content()
+
+    def get_duty(self, angle, cfg):
+        perc = angle / cfg[1]
+        if cfg[4]: perc = 1.0 - perc
+        return int(cfg[2] + (cfg[3] - cfg[2]) * perc)
 
     def move_angles(self, _, change_leds: bool = True):
         self.Log("Starting movement...")
@@ -1209,11 +1213,6 @@ class SIRIUS:
             # return -0.5 * math.cos(math.pi * p) + 0.5
             return -0.5 * math.cos(3.14 * p) + 0.5 # more performance
 
-        # important before sending data
-        def get_duty(angle, cfg):
-            perc = angle / cfg[1]
-            if cfg[4]: perc = 1.0 - perc
-            return int(cfg[2] + (cfg[3] - cfg[2]) * perc)
 
         # coppy global to local variables
         s1, s2, s3 = self.current_angles[1][0], self.current_angles[1][1], self.current_angles[1][2]
@@ -1254,9 +1253,9 @@ class SIRIUS:
 
             # update positon servo
             duties = [
-                get_duty(angle_1_angle, c1),
-                get_duty(angle_2_angle, c2),
-                get_duty(angle_3_angle, c3)
+                self.get_duty(angle_1_angle, c1),
+                self.get_duty(angle_2_angle, c2),
+                self.get_duty(angle_3_angle, c3)
             ]
             sd_set_batch(duties)
 
@@ -1373,38 +1372,46 @@ class SIRIUS:
     def move_one_tick(self, d_time):
         # Stepper
         if self.to_angle[0] != self.current_angles[0]:
+
             base_dir = -1 if self.to_angle[0] > self.current_angles[0] else 1
             self.tmc.set_dir(base_dir)
-            time.sleep_ms(1)
-            self.tmc.run_steps_by_angle(self.to_angle[0], self.current_angles[0], self.stepper_motor_speed)
 
-            self.current_angles[0] = self.to_angle[0]
+            distance = min(abs(self.to_angle[0] - self.current_angles[0]), 0.3)
+            move_to = self.current_angles[0] - (distance * base_dir)
+
+            self.tmc.run_steps_by_angle(move_to, self.current_angles[0], self.stepper_motor_speed)
+
+            self.current_angles[0] = move_to
 
 
         # Servo
-        for a in range(3):
-            # get angle
-            c_angle = self.current_angles[1][a]
-            t_angle = self.to_angle[1][a]
+        if self.to_angle[1] != self.current_angles[1]:
+            c_angles = [self.current_angles[1][0], self.current_angles[1][1], self.current_angles[1][2]]
+            t_angles = [self.to_angle[1][0], self.to_angle[1][1], self.to_angle[1][2]]
 
-            # check if already done
-            if c_angle == t_angle:
-                continue
+            distance = [
+                t_angles[0] - c_angles[0],
+                t_angles[1] - c_angles[1],
+                t_angles[2] - c_angles[2],
+            ]
 
-            # direction
-            angle_dir = 1 if t_angle > c_angle else -1
-            # new angle
-            n_angle = c_angle + self.angle_speed * d_time * angle_dir
+            max_distance = max(distance, key=abs)
 
-            # check if reached
-            if n_angle >= t_angle and angle_dir == 1:
-                self.current_angles[1][a] = self.to_angle[1][a]
-            elif n_angle <= t_angle and angle_dir == -1:
-                self.current_angles[1][a] = self.to_angle[1][a]
+            if abs(max_distance) < self.angle_speed * d_time:
+                n_angle = t_angles
             else:
-                self.current_angles[1][a] = n_angle
-            # move
-            self.sd.set_servo_to(num=a, degree=n_angle)
+                percentage = abs(self.angle_speed * d_time / max_distance)
+
+                n_angle = [
+                    c_angles[0] + distance[0] * percentage,
+                    c_angles[1] + distance[1] * percentage,
+                    c_angles[2] + distance[2] * percentage
+                ]
+
+            self.current_angles[1] = n_angle
+
+            for a in range(3):
+                self.sd.set_servo_to(num=a, degree=n_angle[a])
 
     """Control"""
 

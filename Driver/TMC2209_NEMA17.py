@@ -3,6 +3,8 @@ from machine import  Pin
 
 class TMC2209:
     def __init__(self, step_pin_num=33, dir_pin_num=25, en_pin_num=32):
+        self.current_dir = None
+
         # pin num
         self.step_pin_num = step_pin_num
         self.dir_pin_num = dir_pin_num
@@ -29,10 +31,14 @@ class TMC2209:
         self.en_pin.value(1)
 
     def set_dir(self, dir: int):
-        if dir > 0:
+        if dir > 0 and dir != self.current_dir:
             self.dir_pin.value(0)
-        else:
+            time.sleep_ms(10)
+        elif dir != self.current_dir:
             self.dir_pin.value(1)
+            time.sleep_ms(10)
+
+        self.current_dir = dir
 
     def one_step(self):
         self.step_pin.value(1)
