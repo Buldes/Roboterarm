@@ -6,14 +6,14 @@ class Kinematik_Engine:
     def __init__(self,
                  joints_intervall: tuple[int] = (0, 180),
                  base_step_winkel: float = 0.6,
-                 total_length: float = 30.0
+                 total_length: float = 45.0
                  ):
 
         # Limit Value
         self.joints_intervall: tuple[int] = joints_intervall
         self.base_step_winkel: float = base_step_winkel
-        self.total_length: float = 30.0
-        self.max_length: float = 0.91
+        self.total_length: float = total_length
+        self.max_length: float = 1
 
         # calculating process
         self.valid_angle: bool = None

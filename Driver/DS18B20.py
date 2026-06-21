@@ -27,15 +27,16 @@ class DS18B20:
             temps = []
 
             for sensor in self.all_sensors:
-                sensor_id = "".join(['%02x' % b for b in sensor])
-
+                # sensor_id = "".join(['%02x' % b for b in sensor])
                 temp = self.ds_sensor.read_temp(sensor)
                 temps.append([temp, sensor])
 
             return temps
 
-        sensor_id = "".join(['%02x' % b for b in self.all_sensors[0]])
+        # specific sensor
+        sensor = self.all_sensors[index]
+        # sensor_id = "".join(['%02x' % b for b in sensor])
+        temp = self.ds_sensor.read_temp(sensor)
 
-        temp = self.ds_sensor.read_temp(sensor_id)
+        return [temp, sensor]
 
-        return [temp, sensor_id]

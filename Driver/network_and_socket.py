@@ -92,6 +92,8 @@ class network_and_socket:
                 continue
 
             if m == "ping":
+                time.sleep_ms(1)
+                self.log(f"Ping Received from {self.last_address}")
                 self.send_message("ping")
             else:
                 m = m.replace("'", '"')
@@ -101,5 +103,5 @@ class network_and_socket:
                 if len(data) >= 3:
                     if data[-1] == "confirm":
                         time.sleep_ms(1)
-                        self.log("Confirm Received")
+                        self.log(f"Confirm Received from {self.last_address}")
                         self.send_message("received", self.last_address)

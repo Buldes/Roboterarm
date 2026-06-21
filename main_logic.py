@@ -101,6 +101,7 @@ class SIRIUS:
             b'(\xbf.R\x00\x00\x00\xb8': 0,
             "max": 0
         }
+        self.current_temp_sensor_idx: int = 0
 
         # interface temp
         self.min_temp = 20
@@ -183,9 +184,9 @@ class SIRIUS:
         }
 
         """Kinematic"""
-        self.kinematics = Kinematic_Engine.Kinematik_Engine()
+        self.kinematics = Kinematic_Engine.Kinematik_Engine(total_length = 45.0)
         self.current_angle_try:float = 0
-        self.angle_steps: float = 0.1
+        self.angle_steps: float = 0.05
 
         """movement variables"""
         self.current_angles: list = [0, [1, 1, 1]]
@@ -221,7 +222,7 @@ class SIRIUS:
     """Init"""
 
     def start_init(self):
-        TOTAL = 4
+        TOTAL = 5
 
         # start all timer
         self.show_loading(message="Starte Timer", total=TOTAL, current=0)
@@ -238,8 +239,14 @@ class SIRIUS:
         self.move_angles(None, False)
         self.open_close_gripper(0, 0)
 
+
+        self.show_loading(message="Temperatur", total=TOTAL, current=3)
+        for _ in range(7):
+            self.read_and_analyse_temp()
+            time.sleep_ms(50)
+
         # thread
-        self.show_loading(message="Starte Thread", total=TOTAL, current=3)
+        self.show_loading(message="Starte Thread", total=TOTAL, current=4)
         self.start_network_and_socket_thread()
 
         # End
@@ -585,7 +592,7 @@ class SIRIUS:
                 break
 
             # show progress
-            if self.current_angle_try % 10 < 0.1:
+            if self.current_angle_try % 5 < self.angle_steps + 0.000001:
                 bar_progress = int(self.current_angle_try / 360 * 112)
                 self.oled_controller.draw_rect(x=7, y=17, w=bar_progress, h=11, fill=1)
                 self.oled_controller.show_content()
@@ -977,34 +984,30 @@ class SIRIUS:
     """Temperature"""
 
     def read_and_analyse_temp(self, allow_emergency_stop: bool = True):
+
         # get all temps and addresses
-        temps = self.temp_sensor.get_temp()
+        temp = self.temp_sensor.get_temp(self.current_temp_sensor_idx)
 
-        # reset max value
-        self.all_temps["max"] = 0
+        # get data
+        degree = temp[0]
+        address = bytes(temp[1])
+        id = self.temp_address_place[address][0]
 
-        # iterate through all temps
-        for temp in temps:
-            # get data
-            degree = temp[0]
-            address = bytes(temp[1])
-            id = self.temp_address_place[address][0]
+        # get rgb value
+        rgb_color = tuple(self.temp_to_rgb(degree))
 
-            # get rgb value
-            rgb_color = tuple(self.temp_to_rgb(degree))
+        # set new color
+        self.np_controller.set_individual_color(
+            index=id,
+            color=rgb_color,
+            write_ins=False
+        )
 
-            # set new color
-            self.np_controller.set_individual_color(
-                index=id,
-                color=rgb_color,
-                write_ins=False
-            )
+        # save value
+        self.all_temps[address] = degree
 
-            # save value
-            self.all_temps[address] = degree
-
-            # save highest
-            self.all_temps["max"] = max(self.all_temps["max"], degree)
+        # save highest
+        self.all_temps["max"] = max(self.all_temps["max"], degree)
 
         # write on/off (blink)
         self.led_switch = not self.led_switch
@@ -1027,14 +1030,20 @@ class SIRIUS:
             return
 
         # reset temperature timer
-        self.temperatur_timer.init(period=1000, mode=machine.Timer.ONE_SHOT, callback=self.Timer1)
+        self.temperatur_timer.init(period=200, mode=machine.Timer.ONE_SHOT, callback=self.Timer1)
         self.measure_temp = False
 
         # measure temp for next time
-        self.temp_sensor.measure_temp()
+        if self.current_temp_sensor_idx % 3 == 0:
+            self.temp_sensor.measure_temp()
 
         # check if too high
         self.check_emergency_stop()
+
+        # for next one
+        self.current_temp_sensor_idx += 1
+        if self.current_temp_sensor_idx > 6:
+            self.current_temp_sensor_idx = 0
 
     # can also be used manually
     def emergency_stop(self, intense_beep: bool = False):
@@ -1397,10 +1406,10 @@ class SIRIUS:
 
             max_distance = max(distance, key=abs)
 
-            if abs(max_distance) < self.angle_speed * d_time:
+            if abs(max_distance) < (self.angle_speed * 1.5) * d_time:
                 n_angle = t_angles
             else:
-                percentage = abs(self.angle_speed * d_time / max_distance)
+                percentage = abs((self.angle_speed * 1.5) * d_time / max_distance)
 
                 n_angle = [
                     c_angles[0] + distance[0] * percentage,

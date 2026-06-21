@@ -1,6 +1,8 @@
 import time
 import math
-from PySide6.QtWidgets import QMainWindow, QWidget, QPushButton, QApplication, QVBoxLayout, QHBoxLayout, QLabel, QGridLayout, QButtonGroup, QLineEdit,QStackedWidget,QSizePolicy
+
+import json
+from PySide6.QtWidgets import QMainWindow, QWidget, QPushButton, QApplication, QVBoxLayout, QHBoxLayout, QLabel, QGridLayout, QButtonGroup, QLineEdit,QStackedWidget,QSizePolicy, QFileDialog, QMessageBox, QProgressDialog
 import sys
 from qt_material import apply_stylesheet
 import os
@@ -122,16 +124,18 @@ class SocketThread(QThread):
         self.current_data = None
         self.data_send = None
         self.is_running = True
+        self.save_send_data_active: bool = False
 
         self.ping_test_delay = 2
         self.last_ping_test = time.time()
 
         self.last_data_feed = time.time()
+        self.data_received = [False, 0] # [is received, start time]
 
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.server_address = ('10.42.0.62', 4242)
         self.socket.bind(("0.0.0.0", 4242))
-        self.socket.settimeout(2)
+        self.socket.settimeout(0.5)
 
         self.server_is_offline = True
 
@@ -143,16 +147,64 @@ class SocketThread(QThread):
     def stop(self):
         self.is_running = False
 
-    def send_data(self, new_data):
+    def save_send_data(self, new_data):
+        self.save_send_data_active = True
+        self.mutex.lock()
+        self.current_data = new_data
+        self.mutex.unlock()
+
+    def send_data(self, new_data, check_if_received: bool = True):
         self.socket.sendto(new_data.encode(), self.server_address)
+
+        if not check_if_received:
+            return
+
+        self.data_received[1] = time.time()
+
+        if self.save_send_data_active:
+            while True:
+                try:
+                    data, addr = self.socket.recvfrom(1024)
+                    self.data_received[0] = True
+                    break
+                except OSError:
+                    self.socket.sendto(new_data.encode(), self.server_address)
+                    continue  # message is not reached and has to be re-sent
+            self.save_send_data_active = False
+        else:
+            while not self.data_received[0] and time.time() - self.data_received[1] <= 3.0:
+                try:
+                    data, addr = self.socket.recvfrom(1024)
+                    self.data_received[0] = True
+                    break
+                except OSError:
+                    self.socket.sendto(new_data.encode(), self.server_address)
+                    continue # message is not reached and has to be re-sent
+
+        self.last_ping_test = time.time() #  otherwise check_server_status won't work
+
+        if self.data_received[0]:
+            self.data_received[0] = False
+            return
+        else:
+            self.socket_status.emit(1, 0)
+            self.server_ping.emit(3_000)
+            self.server_is_offline = True
+            self.log_signal.emit(f"Verbindung zum Server fehlgeschlagen", 1)
 
     def check_server_status(self):
         start_time = time.perf_counter()
 
-        self.send_data("ping")
-        try:
-            data, addr = self.socket.recvfrom(1024)
-        except TimeoutError:
+        self.send_data("ping", False)
+
+        while time.perf_counter() - start_time <= 2:
+            try:
+                data, addr = self.socket.recvfrom(1024)
+                break
+            except TimeoutError:
+                pass
+
+        if time.perf_counter() - start_time >= 2:
             self.socket_status.emit(1, 0)
             self.server_ping.emit(2_000)
             self.server_is_offline = True
@@ -162,7 +214,7 @@ class SocketThread(QThread):
         # get delay
         delay = time.perf_counter() - start_time
         self.socket_status.emit(1, 1)
-        self.server_ping.emit(int(delay * 1_000))
+        self.server_ping.emit(int(delay * 1_000 - 1))
 
         if self.server_is_offline: #  to prevent multiple
             self.log_signal.emit(f"Verbindung zum Server hergestellt", 0)
@@ -202,7 +254,7 @@ class SocketThread(QThread):
 
             # ERROR
             except Exception as e:
-                self.log_signal.emit(f"Ein trat ein Fehler im Socket Thread auf: {e}", 2)
+                self.log_signal.emit(f"Es trat ein Fehler im Socket Thread auf: {e}", 2)
                 self.socket_status.emit(0, 0)
                 time.sleep(1)
         # stop
@@ -497,6 +549,7 @@ class MainWindow(QMainWindow):
         self.title_label_field2 = None
         self.controller_connection_btn = None
         self.controller_connection_label = None
+        self.controller_control_type_button: list = []
         self.vector_label_title = None
         self.vector_label_normalized_title = None
         self.vector_label_normalized = None
@@ -517,6 +570,11 @@ class MainWindow(QMainWindow):
         self.socket_status_title = None
         self.socket_status_names = None
         self.socket_status_status = None
+        self.movement_sequence_title = None
+        self.movement_sequence_start_button = None
+        self.movement_sequence_file_name_button = None
+        self.movement_sequence_save_pos_button = None
+        self.movement_sequence_file_name_lable = None
 
         # ALL FIELD 4
         self.logging_label = None
@@ -554,6 +612,10 @@ class MainWindow(QMainWindow):
         self.current_angles: list = [0, [0, 0, 0]] # [base_rotation, joint_rotation]
         self.gripper_pos: list = [0, 0]
 
+        # FOR SEQUENCE
+        self.selected_sequence_file: str = ""
+        self.current_sequence: list = []
+
         """CALCULATIONS"""
         self.kinematics = Kinematic_Engine.Kinematik_Engine(total_length=45)
         self.kinematics.max_length = 1
@@ -579,13 +641,14 @@ class MainWindow(QMainWindow):
 
         """--- CONTROLLER INTEGRATION ---"""
         self.controller_is_connected = 0 # -1 = not active, 0 = connected, 1 = active
-        self.controller_speed: float = 2
+        self.controller_speed: float = 0.1
         self.controller_delta_time: float = -1
         self.last_controller_joystick_input: list = [0, 0, 0, 0]
         self.current_button_pressed: set = set()
+        self.controller_control_type: int = 0 # relative (1) or absolute (0)
 
         self.loop_joystick_input = QTimer(self)
-        self.loop_joystick_input.timeout.connect(self.calc_new_vector_by_joystick)
+        self.loop_joystick_input.timeout.connect(self.new_vector_by_joystick)
         self.loop_joystick_input.setInterval(10)
         self.loop_joystick_input.start()
 
@@ -734,10 +797,34 @@ class MainWindow(QMainWindow):
         self.field_2_layout.addWidget(self.controller_connection_label[1], 1, 1, 1, 1)
         self.field_2_layout.addWidget(self.controller_connection_btn, 2, 0, 1, 2)
 
+        # controller control type
+        self.controller_control_type_button = [
+            QLabel("Kontroller Steuerung".upper()),
+            QButtonGroup(self),
+            QPushButton("absolute"),
+            QPushButton("relative")
+        ]
+        self.controller_control_type_button[0].setObjectName("under_field_title")
+
+        def set_controller_type(new_type):
+            self.controller_control_type = new_type
+        self.controller_control_type_button[1].idClicked.connect(lambda i: set_controller_type(i))
+
+
+        for i in range(2):
+            btn = self.controller_control_type_button[i + 2]
+            btn.setCheckable(True)
+            self.field_2_layout.addWidget(btn, 4, i, 1, 1)
+            self.controller_control_type_button[1].addButton(btn, i)
+
+        self.controller_control_type_button[2].setChecked(True)
+
+        self.field_2_layout.addWidget(self.controller_control_type_button[0], 3, 0, 1, 2)
+
         # Vector input
         self.vector_input_title = QLabel("Vektor Eingeben".upper())
         self.vector_input_title.setObjectName("under_field_title")
-        self.field_2_layout.addWidget(self.vector_input_title, 3, 0, 1, 2)
+        self.field_2_layout.addWidget(self.vector_input_title, 5, 0, 1, 2)
 
         self.vector_input_label = [QLabel("X:"), QLabel("Y:"), QLabel("Z:")]
         self.vector_input_fields = [QLineEdit(), QLineEdit(), QLineEdit()]
@@ -752,7 +839,7 @@ class MainWindow(QMainWindow):
 
         for x, column in enumerate([self.vector_input_label, self.vector_input_fields]):
             for i in range(len(self.vector_input_label)):
-                self.field_2_layout.addWidget(column[i], 4 + i, x, 1, 1)
+                self.field_2_layout.addWidget(column[i], 7 + i, x, 1, 1)
 
         self.vector_input_type = [
             QButtonGroup(self),
@@ -766,14 +853,14 @@ class MainWindow(QMainWindow):
         for i in range(2):
             btn = self.vector_input_type[i + 1]
             btn.setCheckable(True)
-            self.field_2_layout.addWidget(btn, 7, i, 1, 1)
+            self.field_2_layout.addWidget(btn, 10, i, 1, 1)
             self.vector_input_type[0].addButton(btn, i)
 
         self.vector_input_type[1].setChecked(True)
 
         self.vector_input_btn = QPushButton("Bestätigen")
         self.vector_input_btn.clicked.connect(lambda _: self.vector_input_click(None, 1))
-        self.field_2_layout.addWidget(self.vector_input_btn, 8, 0, 1, 2)
+        self.field_2_layout.addWidget(self.vector_input_btn, 11, 0, 1, 2)
 
         # vector label
         self.vector_label_title = QLabel("aktueller Vektor".upper())
@@ -784,11 +871,11 @@ class MainWindow(QMainWindow):
         self.vector_label_real_title = QLabel("Real")
         self.vector_label_real = QLabel("X:  -.-- \nY:  -.-- \nZ:  -.--")
 
-        self.field_2_layout.addWidget(self.vector_label_title, 9, 0, 1, 2)
-        self.field_2_layout.addWidget(self.vector_label_normalized_title, 10, 0, 1, 1)
-        self.field_2_layout.addWidget(self.vector_label_normalized, 10, 1, 1, 1)
-        self.field_2_layout.addWidget(self.vector_label_real_title, 11, 0, 1, 1)
-        self.field_2_layout.addWidget(self.vector_label_real, 11, 1, 1, 1)
+        self.field_2_layout.addWidget(self.vector_label_title, 12, 0, 1, 2)
+        self.field_2_layout.addWidget(self.vector_label_normalized_title, 13, 0, 1, 1)
+        self.field_2_layout.addWidget(self.vector_label_normalized, 13, 1, 1, 1)
+        self.field_2_layout.addWidget(self.vector_label_real_title, 14, 0, 1, 1)
+        self.field_2_layout.addWidget(self.vector_label_real, 14, 1, 1, 1)
 
         # set last row
         last_row = self.field_2_layout.rowCount()
@@ -837,6 +924,26 @@ class MainWindow(QMainWindow):
 
         for i in range(3):
             self.field_3_layout.addWidget(self.socket_status_names[i], 7 + i, 0, 1, 1)
+
+        # movement sequence
+        self.movement_sequence_title = QLabel("BEWEGUNGSABLAUF")
+        self.movement_sequence_title.setObjectName("under_field_title")
+        self.field_3_layout.addWidget(self.movement_sequence_title, 14, 0, 1, 2)
+
+        self.movement_sequence_file_name_button = QPushButton("Datei auswählen")
+        self.movement_sequence_file_name_button.clicked.connect(self.select_sequence_file)
+        self.field_3_layout.addWidget(self.movement_sequence_file_name_button, 15, 0, 1, 2)
+
+        self.movement_sequence_file_name_lable = QLabel("Datei: -NICHT AUSGEWÄHLT-")
+        self.field_3_layout.addWidget(self.movement_sequence_file_name_lable, 16, 0, 1, 2)
+
+        self.movement_sequence_save_pos_button = QPushButton("Position schreiben")
+        self.movement_sequence_save_pos_button.clicked.connect(self.add_pos_to_sequence)
+        self.field_3_layout.addWidget(self.movement_sequence_save_pos_button, 17, 0, 1, 2)
+
+        self.movement_sequence_start_button = QPushButton("Ablauf starten")
+        self.movement_sequence_start_button.clicked.connect(self.send_sequence)
+        self.field_3_layout.addWidget(self.movement_sequence_start_button, 18, 0, 1, 2)
 
         # set last row
         last_row = self.field_3_layout.rowCount()
@@ -915,7 +1022,7 @@ class MainWindow(QMainWindow):
     def update_all_angles(self, new_angles,move_type):
         self.current_angles: list = new_angles # [base_rotation, joint_rotation]
 
-        self.socket_thread.feed_data(str(["angles", move_type, new_angles]))
+        self.socket_thread.feed_data(str(["angles", move_type, new_angles, "confirm"]))
 
         # update GUI
         for i in range(len(self.angle_labels_values) - 1):
@@ -976,6 +1083,116 @@ class MainWindow(QMainWindow):
         if self.calculated_vector != self.current_vector.copy():
             self.new_vector.emit(self.current_vector[0], self.current_vector[1], self.current_vector[2], move_type)
     # </editor-fold>
+
+    """SEQUENCE"""
+
+    def select_sequence_file(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Ablauf-Datei auswählen oder erstellen", "",
+                                              "JSON Files (*.json)",options=QFileDialog.DontConfirmOverwrite)
+
+        if not path: # not selected
+            return
+
+        if not os.path.exists(path):
+            self.current_sequence = [ ["gripper", [0, 0]], ["angles", "move", [0, [0, 0, 0]]] ]
+            with open(path, "w") as f:
+                json.dump(self.current_sequence, f, indent=4)
+        else:
+            # check if data is valid
+            data_read = []
+            with open(path, "r") as f:
+                data_read = json.load(f)
+
+            try:
+                for data in data_read:
+                    if data[0] == "gripper":
+                        for a in range(2):
+                            if type(data[1][a]) != float and type(data[1][a]) != int:
+                                raise TypeError
+
+                    elif data[0] == "angles":
+                        if not type(data[1]) == str:
+                            raise TypeError
+                        elif type(data[2][0]) != float and type(data[2][0]) != int :
+                                raise TypeError
+                        else:
+                            for a in range(3):
+                                if type(data[2][1][a]) != float and type(data[2][1][a]) != int:
+                                    raise TypeError
+
+            except Exception as e:
+                self.log(f"Die gewählte Datei enthält einen Fehler!", 2)
+                QMessageBox.critical(self, "Datei ungültig", f"Die ausgewählt Datei ist ungültig. Bitte überprüfe diese oder wähle eine andere.\nDatei: {path}")
+                self.current_sequence = []
+                self.selected_sequence_file = ""
+                self.movement_sequence_file_name_lable.setText(f"Datei: -NICHT AUSGEWÄHLT-")
+                return
+            else:
+                self.current_sequence = data_read
+
+
+        self.log(f"Datei erfolgreich geladen")
+        self.selected_sequence_file = path
+
+        # update GUI
+        self.movement_sequence_file_name_lable.setText(f"Datei: {path.split('/')[-1]}")
+
+    def add_pos_to_sequence(self):
+        try:
+            if self.selected_sequence_file == "":
+                self.log("Es ist keine Datei ausgewählt.", 1)
+                return
+
+            self.current_sequence.append(["angles", "move", self.current_angles])
+            self.current_sequence.append(["gripper", self.gripper_pos])
+
+            with open(self.selected_sequence_file, "w") as f:
+                json.dump(self.current_sequence, f, indent=4)
+
+            self.log("Position gespeichert")
+        except:
+            self.log("Es ist ein Fehler aufgetreten. Position konnte nicht gespeichert werden.", 2)
+
+    def send_sequence(self):
+        if self.selected_sequence_file == "":
+            self.log("Es ist keine Datei ausgewählt.", 1)
+            return
+
+        self.log("Sende Bewegungsablauf...", 0)
+
+        total_elements = len(self.current_sequence)
+
+        progress_window = QProgressDialog("Bitte warten...", "Abbrechen", 0, total_elements, self)
+        progress_window.setWindowTitle("S.I.R.I.U.S. - Movement-Sequence")
+        progress_window.setWindowModality(Qt.WindowModal)
+        progress_window.setAutoClose(True)
+        progress_window.setMinimumDuration(0)
+        progress_window.setValue(0)
+        progress_window.show()
+
+        time.sleep(.500)
+        for index, data in enumerate(self.current_sequence):
+            data.append("confirm")
+            self.socket_thread.save_send_data(str(data))
+
+            while self.socket_thread.current_data != self.socket_thread.data_send:
+                time.sleep(0.01)
+
+                if progress_window.wasCanceled():
+                    self.log("Ladevorgang abgebrochen.", 1)
+                    return
+
+            progress_window.setValue(index)
+            progress_window.setLabelText(f"Daten werden gesendet... ({index+1}/{total_elements})")
+            self.log(f"Daten werden gesendet... ({index+1}/{total_elements})")
+
+            if progress_window.wasCanceled():
+                self.log("Ladevorgang abgebrochen.", 1)
+                return
+
+        progress_window.setValue(total_elements + 1)
+        progress_window.destroy()
+        self.log(f"Bewegungsablauf erfolgreich gesendet")
 
     """PERSPEKTIVE"""
     
@@ -1050,11 +1267,17 @@ class MainWindow(QMainWindow):
             min(max(self.gripper_pos[1], -135), 135),
         ]
 
-        self.socket_thread.feed_data(str(["gripper", self.gripper_pos]))
+        self.socket_thread.feed_data(str(["gripper", self.gripper_pos, "confirm"]))
 
         self.log(f"Greifer verändert: geschlossen: {self.gripper_pos[0]:.1f}, rotiert: {self.gripper_pos[1]:.1f}")
 
-    def calc_new_vector_by_joystick(self):
+    def new_vector_by_joystick(self):
+        if self.controller_control_type == 0:
+            self.calc_new_vector_by_joystick_absolute()
+        else:
+            self.calc_new_vector_by_joystick_relative()
+
+    def calc_new_vector_by_joystick_absolute(self):
         if self.controller_is_connected != 1:
             self.controller_delta_time = time.time()
             return
@@ -1095,6 +1318,71 @@ class MainWindow(QMainWindow):
             n_vec[i] += add_cord
             n_vec[i] = max(-1, min(1, n_vec[i]))
 
+
+        self.new_vector.emit(n_vec[0], n_vec[1], n_vec[2], "set")
+
+        self.controller_delta_time = time.time()
+
+    def calc_new_vector_by_joystick_relative(self):
+        if self.controller_is_connected != 1:
+            self.controller_delta_time = time.time()
+            return
+
+        # check for first run
+        if self.controller_delta_time == -1:
+            self.controller_delta_time = time.time()
+            return
+
+        # check if input is simply none
+        if self.last_controller_joystick_input == [0, 0, 0, 0]:
+            self.controller_delta_time = time.time()
+            return
+
+        # var
+        n_vec = self.current_vector.copy()
+        d_time = time.time() - self.controller_delta_time
+
+        # axis 2 (index = 1) is Y-Axis
+        c_value = self.last_controller_joystick_input[1]
+
+        # return if c_value is 0
+        if c_value != 0:
+            direction = -1 if c_value < 0 else 1
+
+            add_cord = (c_value / 100) ** 2 * d_time * self.controller_speed * direction
+
+            n_vec[1] += add_cord
+            n_vec[1] = max(-1, min(1, n_vec[1]))
+
+        # Calc new x and y so that basis angle stays the exact same and only the radius/distance changes.
+        c_value = self.last_controller_joystick_input[0]
+        if c_value != 0:
+            direction = -1 if c_value < 0 else 1
+            add_cord = (c_value / 100) ** 2 * d_time * self.controller_speed * direction
+
+            d_old = math.sqrt(n_vec[0] ** 2 + n_vec[2] ** 2)
+            d_new = d_old + add_cord
+
+            scale_f = d_new / d_old
+
+            n_vec[0] *= scale_f
+            n_vec[2] *= scale_f
+
+        # axis 3 (index = 2) rotates only along the base
+        c_value = self.last_controller_joystick_input[2]
+        if c_value != 0:
+            direction = -1 if c_value < 0 else 1
+            add_degree = (c_value / 50) ** 2 * d_time * self.controller_speed * direction
+
+            current_radius = math.sqrt(n_vec[0] ** 2 + n_vec[2] ** 2)
+
+            base_rotation_degree = math.atan2(n_vec[2], n_vec[0])
+
+            new_degree = base_rotation_degree + add_degree
+            print(base_rotation_degree, new_degree, add_degree)
+
+            n_vec[0] = current_radius * math.cos(new_degree)
+            n_vec[2] = current_radius * math.sin(new_degree)
 
         self.new_vector.emit(n_vec[0], n_vec[1], n_vec[2], "set")
 
