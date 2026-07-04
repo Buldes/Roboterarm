@@ -36,7 +36,10 @@ class DS18B20:
         # specific sensor
         sensor = self.all_sensors[index]
         # sensor_id = "".join(['%02x' % b for b in sensor])
-        temp = self.ds_sensor.read_temp(sensor)
+        try:
+            temp = self.ds_sensor.read_temp(sensor)
+        except Exception as e:
+            return [False, e]
 
         return [temp, sensor]
 

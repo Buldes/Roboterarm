@@ -988,6 +988,13 @@ class SIRIUS:
         # get all temps and addresses
         temp = self.temp_sensor.get_temp(self.current_temp_sensor_idx)
 
+        if not temp[0]: # ERROR
+            self.Log(f"An error occur while trying to read temperature on Sensor-Index {self.current_temp_sensor_idx}: {temp[1]}", 2)
+            self.temp_sensor.measure_temp()
+            time.sleep_ms(750)
+            return
+
+
         # get data
         degree = temp[0]
         address = bytes(temp[1])
