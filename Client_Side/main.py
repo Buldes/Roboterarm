@@ -1,6 +1,6 @@
 import time
 import math
-
+from pathlib import Path
 import json
 from PySide6.QtWidgets import QMainWindow, QWidget, QPushButton, QApplication, QVBoxLayout, QHBoxLayout, QLabel, QGridLayout, QButtonGroup, QLineEdit,QStackedWidget,QSizePolicy, QFileDialog, QMessageBox, QProgressDialog
 import sys
@@ -13,6 +13,7 @@ import datetime
 import Kinematic_Engine
 import socket
 from PySide6.QtSvgWidgets import QSvgWidget
+import video_stream
 
 def load_stylesheet(file_path):
     abs_path = os.path.abspath(__file__).replace("main.py", "")
@@ -512,6 +513,123 @@ class RobotArmCanvas(QWidget):
 
         painter.end()
 
+class VLA_data_collection(QThread):
+    def __init__(self):
+        super().__init__()
+
+        self._running = True
+
+        self.instructions = "pick up brown box with O and place ontop of brown box with X"
+
+        self.current_step: dict = {}
+        self.all_steps = {}
+        self.last_step: dict = {}
+        self.step_index: int = 0
+
+        self.start_time: float = 0.0
+        self.last_step_time: float = 0.0
+
+        self.current_vector = [0, 0, 0]
+        self.gripper_pos = [0, 0]
+
+        self.start_recording = False
+
+        self.current_episode = 70
+
+        self.path_to_files = ""
+        self.episode_folder = ""
+        self.base_path = os.path.dirname(os.path.abspath(__file__))
+
+        self.vs = video_stream.video_stream()
+        self.vs.set_url("http://10.42.0.124:8080/video")
+        self.vs.initialise_video_stream()
+        self.vs.set_recommended()
+
+        self.init_structure_and_json()
+
+    def run(self):
+        while self._running:
+            if not self.start_recording and self.current_vector != [0.5, 0.62, 0.0] and self.current_vector != [0, 0, 0]:
+                self.start_recording = True
+                self.start_time = time.time()
+
+                self.init_vla_data_collections()
+                self.step_index = 1
+
+            elif self.start_recording:
+                new_action = [self.current_vector[0], self.current_vector[1], self.current_vector[2], 0.0, 0.0, self.gripper_pos[0], self.gripper_pos[1]]
+
+                if new_action == self.current_step["observation"]["state"]: # prevent dupes!
+                    time.sleep(0.01)
+                    continue
+
+                d_time = time.time() - self.last_step_time
+
+                self.current_step["action"] = new_action
+                self.save_frame()
+                self.save_new_step(self.current_step)
+
+                self.current_step = {
+                  "step_index": self.step_index,
+                  "timestamp": time.time() - self.start_time,
+                  "image_path": f"images/frame_{self.step_index:04d}.jpg",
+                  "observation": {
+                    "state": new_action
+                  },
+                  "action": []
+                }
+
+                self.last_step_time = time.time()
+                self.step_index += 1
+
+                time.sleep(max(0.001, 0.15 - d_time))
+
+            else:
+                time.sleep(0.1)
+
+    def init_vla_data_collections(self):
+        self.current_step = {
+            "step_index": self.step_index,
+            "timestamp": time.time() - self.start_time,
+            "image_path": f"images/frame_{self.step_index}.jpg",
+            "observation": {
+                "state": [self.current_vector[0], self.current_vector[1], self.current_vector[2], 0.0, 0.0,
+                          self.gripper_pos[0], self.gripper_pos[1]]
+            },
+            "action": []
+        }
+
+        self.last_step: dict = self.current_step
+
+    def init_structure_and_json(self):
+
+        self.episode_folder = rf"episode_{self.current_episode:04d}"
+        self.path_to_files = rf"{self.base_path}\raw_dataset\{self.episode_folder}/"
+
+        nested_folder = Path(rf"{self.path_to_files}images")
+        nested_folder.mkdir(parents=True)
+
+        self.all_steps = { "language_instruction": self.instructions, "steps": [ ]}
+
+        with open(rf"{self.path_to_files}/trajectory.json", "w", encoding="utf-8") as f:
+            json.dump(self.all_steps, f, indent=4)
+
+    def save_frame(self):
+        image_name = f"images/frame_{self.step_index - 1:04d}.jpg"
+        self.vs.save_image(rf"{self.path_to_files}/{image_name}")
+
+    def save_new_step(self, n_step):
+        self.all_steps["steps"].append(n_step)
+
+        with open(rf"{self.path_to_files}/trajectory.json", "w", encoding="utf-8") as f:
+            json.dump(self.all_steps, f, indent=4)
+
+    def feed_new_vector(self, x, y, z, s):
+        self.current_vector = [x, y, z]
+
+    def feed_new_gripper(self, g):
+        self.gripper_pos = g
+
 class MainWindow(QMainWindow):
     new_vector = Signal(float, float, float, str)
     new_angles = Signal(list, str)
@@ -519,6 +637,12 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowFlags(Qt.FramelessWindowHint)
+
+        # vla data collection
+        self.use_vla_collection = False
+        if self.use_vla_collection:
+            self.vla_thread = VLA_data_collection()
+            self.vla_thread.start()
 
         """GUI VAR"""
         # MAIN
@@ -645,7 +769,7 @@ class MainWindow(QMainWindow):
         self.controller_delta_time: float = -1
         self.last_controller_joystick_input: list = [0, 0, 0, 0]
         self.current_button_pressed: set = set()
-        self.controller_control_type: int = 0 # relative (1) or absolute (0)
+        self.controller_control_type: int = 1 # relative (1) or absolute (0)
 
         self.loop_joystick_input = QTimer(self)
         self.loop_joystick_input.timeout.connect(self.new_vector_by_joystick)
@@ -665,6 +789,7 @@ class MainWindow(QMainWindow):
         """DEFAULT POSITON"""
         self.set_to_pos(0)
         # </editor-fold>
+
 
     """LOGGING"""
 
@@ -1019,6 +1144,9 @@ class MainWindow(QMainWindow):
         self.calculate_angle_by_new_vector(new_vec=[x, y, z], move_type=move_type)
         self.current_vector = [x, y, z]
 
+        if self.use_vla_collection:
+            self.vla_thread.feed_new_vector(x, y, z, move_type)
+
     def update_all_angles(self, new_angles,move_type):
         self.current_angles: list = new_angles # [base_rotation, joint_rotation]
 
@@ -1035,6 +1163,7 @@ class MainWindow(QMainWindow):
 
     def set_to_pos(self, pos: int):
         if pos == 0:
+            self.socket_thread.feed_data(str(["gripper", self.gripper_pos, "confirm"]))
             self.new_vector.emit(0.5, 0.62, 0, "move")
 
     def calculate_angle_by_new_vector(self, new_vec: list,  move_type):
@@ -1268,6 +1397,8 @@ class MainWindow(QMainWindow):
         ]
 
         self.socket_thread.feed_data(str(["gripper", self.gripper_pos, "confirm"]))
+        if self.use_vla_collection:
+            self.vla_thread.feed_new_gripper(self.gripper_pos)
 
         self.log(f"Greifer verändert: geschlossen: {self.gripper_pos[0]:.1f}, rotiert: {self.gripper_pos[1]:.1f}")
 
@@ -1379,7 +1510,6 @@ class MainWindow(QMainWindow):
             base_rotation_degree = math.atan2(n_vec[2], n_vec[0])
 
             new_degree = base_rotation_degree + add_degree
-            print(base_rotation_degree, new_degree, add_degree)
 
             n_vec[0] = current_radius * math.cos(new_degree)
             n_vec[2] = current_radius * math.sin(new_degree)

@@ -68,8 +68,8 @@ class SIRIUS:
         self.ir_controller.init()
 
         """Emergency Button"""
-        self.emergency_button = machine.ADC(machine.Pin(13))
-        self.emergency_button.init(atten=machine.ADC.ATTN_11DB)
+        self.emergency_button = machine.Pin(13, mode=machine.Pin.IN)
+        self.emergency_led = machine.Pin(2, mode=machine.Pin.OUT)
 
         """Beeper"""
         self.beeper = machine.PWM(machine.Pin(17))
@@ -272,11 +272,8 @@ class SIRIUS:
             self.beeper.duty(0)
 
     def read_emergency_button_value(self):
-        v = self.emergency_button.read_u16()
-        if v < 45_000:
-            return True # ON
-        else:
-            return False # OFF
+        v = self.emergency_button.value()
+        return not v
 
     def temp_to_rgb(self, temp):
         # Definition deiner Stützpunkte (Temperatur, (R, G, B))
@@ -964,18 +961,18 @@ class SIRIUS:
         self.temperatur_timer = machine.Timer(1)
         self.temperatur_timer.init(period=1500, mode=machine.Timer.ONE_SHOT, callback=self.Timer1)
 
-        # emergenc button
-        self.emergency_button_timer = machine.Timer(3) # Timer 2 is used for movement
-        self.emergency_button_timer.init(period=100, mode=machine.Timer.ONE_SHOT, callback=self.check_emergency_stop)
+        # emergency button
+        # self.emergency_button_timer = machine.Timer(3) # Timer 2 is used for movement
+        # self.emergency_button_timer.init(period=100, mode=machine.Timer.ONE_SHOT, callback=self.check_emergency_stop)
 
     def Timer1(self, timer):
         self.measure_temp = True
 
     def check_emergency_stop(self):
-        # check if button is tuned off (= Emergency stop)
-        # if not self.read_emergency_button_value():
-        #     self.emergency_stop()
-        # check if temperature is too high.
+        # check if button is tuned on
+        if self.read_emergency_button_value():
+            self.emergency_stop()
+        # Check if temperature is too high.
         if self.all_temps["max"] >= self.max_temp:
             self.emergency_stop(intense_beep=True)
 
@@ -1054,11 +1051,22 @@ class SIRIUS:
 
     # can also be used manually
     def emergency_stop(self, intense_beep: bool = False):
+        # turn led on
+        self.emergency_led.value(1)
+
         # save what is shown before
         saved_display_buffer = bytearray(self.oled_controller.display.renderbuf)
 
         # fan to max
         self.fan_controller.set_fan_percentage(1)
+
+        # kill all servos
+
+        self.sd.set_channel_duty(channel_num=0, duty_num=0)
+        self.sd.set_channel_duty(channel_num=1, duty_num=0)
+        self.sd.set_channel_duty(channel_num=2, duty_num=0)
+        self.sd.set_channel_duty(channel_num=3, duty_num=0)
+        self.sd.set_channel_duty(channel_num=4, duty_num=0)
 
         # show on display
         self.oled_controller.clear(1)
@@ -1078,7 +1086,7 @@ class SIRIUS:
         else:
             self.play_tone(frequency=4_000, duration=200, duty=200)
 
-        while not self.read_emergency_button_value() or self.all_temps["max"] >= self.third_temp:
+        while self.read_emergency_button_value() or self.all_temps["max"] >= self.third_temp:
             time.sleep_ms(750)
             self.read_and_analyse_temp(False)
             self.fan_controller.set_fan_percentage(1)
@@ -1095,9 +1103,15 @@ class SIRIUS:
 
             time.sleep_ms(900)
 
+
+        # turn led off
+        self.emergency_led.value(0)
+
         # reactivate
+        self.current_angles = [0, [1, 1, 1]]
+        self.to_angle = [0, [0, 0, 0]]
+        self.move_angles(True)
         self.tmc.turn_on()
-        self.set_position("zero")
 
         # show old content
         self.oled_controller.display.renderbuf[:] = saved_display_buffer
@@ -1314,7 +1328,7 @@ class SIRIUS:
             self.open_close_gripper(0 ,0)
             self.to_angle = [0, [60, 60, 30]]
         elif pos == "beautiful":
-            self.to_angle = [0, [30, 30, 30]]
+            self.to_angle = [0, [0, 45, 45]]
 
         self.auto_run_movement(start_delay=250)
         time.sleep_ms(300)
